@@ -1,1 +1,33 @@
 # Attendance
+
+一个简约、完全离线的 Android 点名应用。使用 Kotlin、Jetpack Compose 与 Material 3 构建。
+
+## 功能
+
+- 创建多个班级，在设备本地保存班级、学生和历史点名记录
+- 手动添加学生，或从 CSV/TXT 文件批量导入姓名和学号
+- 点按学生卡片即可标记“到”，也可指定迟到、请假、缺勤及原因
+- 结束点名时自动把未标记学生记为缺勤，并显示统计与明细
+- 从班级页查看以往点名结果
+
+## 名单格式
+
+推荐使用 UTF-8 编码，支持逗号、制表符或分号分隔。表头可写成：
+
+```csv
+学号,姓名
+20260001,张三
+20260002,李四
+```
+
+也支持 `姓名,学号`、无表头的两列文件，以及每行只有姓名的纯文本名单。
+
+## 本地构建
+
+需要 JDK 17 和 Android SDK 35：
+
+```bash
+./gradlew assembleDebug
+```
+
+GitHub Actions 中的 “Build unsigned APK” 可手动运行。它执行 `assembleRelease`，产物为未签名的 `app-release-unsigned.apk`。
