@@ -34,6 +34,12 @@ class AttendanceRepository(context: Context) {
         saveSessions()
     }
 
+    fun renameClass(classId: String, name: String) {
+        val cleanName = name.trim()
+        if (cleanName.isEmpty()) return
+        updateClass(classId) { it.copy(name = cleanName) }
+    }
+
     fun addStudent(classId: String, name: String, studentNumber: String) {
         val cleanName = name.trim()
         if (cleanName.isEmpty()) return
@@ -51,6 +57,22 @@ class AttendanceRepository(context: Context) {
     fun removeStudent(classId: String, studentId: String) {
         updateClass(classId) { group ->
             group.copy(students = group.students.filterNot { it.id == studentId })
+        }
+    }
+
+    fun updateStudent(classId: String, studentId: String, name: String, studentNumber: String) {
+        val cleanName = name.trim()
+        if (cleanName.isEmpty()) return
+        updateClass(classId) { group ->
+            group.copy(
+                students = group.students.map { student ->
+                    if (student.id == studentId) {
+                        student.copy(name = cleanName, studentNumber = studentNumber.trim())
+                    } else {
+                        student
+                    }
+                },
+            )
         }
     }
 
@@ -181,6 +203,50 @@ class AttendanceRepository(context: Context) {
     fun setHistoryTitleMode(mode: HistoryTitleMode) =
         updateSettings(_settings.value.copy(historyTitleMode = mode))
 
+    fun setDisplayOption(option: DisplayOption, enabled: Boolean) {
+        val updated = when (option) {
+            DisplayOption.STUDENT_NUMBERS -> _settings.value.copy(showStudentNumbers = enabled)
+            DisplayOption.CLASS_STUDENT_COUNT -> _settings.value.copy(showClassStudentCount = enabled)
+            DisplayOption.CLASS_OPERATION_HINT -> _settings.value.copy(showClassOperationHint = enabled)
+            DisplayOption.ROLL_CALL_PROGRESS -> _settings.value.copy(showRollCallProgress = enabled)
+            DisplayOption.OPERATION_HINT -> _settings.value.copy(showOperationHint = enabled)
+            DisplayOption.STATUS_BUTTON -> _settings.value.copy(showStatusButton = enabled)
+            DisplayOption.REASONS_IN_ROLL_CALL -> _settings.value.copy(showReasonsInRollCall = enabled)
+            DisplayOption.RESULT_SUMMARY -> _settings.value.copy(showResultSummary = enabled)
+            DisplayOption.EMPTY_RESULT_GROUPS -> _settings.value.copy(showEmptyResultGroups = enabled)
+            DisplayOption.HISTORY_STATISTICS -> _settings.value.copy(showHistoryStatistics = enabled)
+            DisplayOption.CONFIRM_INCOMPLETE -> _settings.value.copy(confirmIncompleteAttendance = enabled)
+            DisplayOption.COMPACT_ROLL_CALL -> _settings.value.copy(compactRollCallRows = enabled)
+        }
+        updateSettings(updated)
+    }
+
+    fun exportBackup(): String = JSONObject()
+        .put("formatVersion", 1)
+        .put("classes", JSONArray(preferences.getString(KEY_CLASSES, "[]")))
+        .put("sessions", JSONArray(preferences.getString(KEY_SESSIONS, "[]")))
+        .put("settings", settingsToJson(_settings.value))
+        .toString(2)
+
+    fun importBackup(text: String): Boolean = runCatching {
+        val root = JSONObject(text)
+        require(root.optInt("formatVersion", 1) == 1) { "不支持的备份版本" }
+        val classesJson = root.getJSONArray("classes").toString()
+        val sessionsJson = root.getJSONArray("sessions").toString()
+        val settingsJson = root.getJSONObject("settings").toString()
+        val restoredClasses = parseClasses(classesJson)
+        val restoredSessions = parseSessions(sessionsJson)
+        val restoredSettings = parseSettings(settingsJson)
+        preferences.edit()
+            .putString(KEY_CLASSES, classesJson)
+            .putString(KEY_SESSIONS, sessionsJson)
+            .putString(KEY_SETTINGS, settingsJson)
+            .apply()
+        _classes.value = restoredClasses
+        _sessions.value = restoredSessions
+        _settings.value = restoredSettings
+    }.isSuccess
+
     fun setExportHeader(enabled: Boolean) = updateSettings(_settings.value.copy(exportHeader = enabled))
 
     fun setExportSummary(enabled: Boolean) = updateSettings(_settings.value.copy(exportSummary = enabled))
@@ -250,8 +316,12 @@ class AttendanceRepository(context: Context) {
 
     private fun updateSettings(settings: AppSettings) {
         _settings.value = settings
+        preferences.edit().putString(KEY_SETTINGS, settingsToJson(settings).toString()).apply()
+    }
+
+    private fun settingsToJson(settings: AppSettings): JSONObject {
         val reasons = JSONArray().apply { settings.absenceReasons.forEach { put(it) } }
-        val json = JSONObject()
+        return JSONObject()
             .put("absenceReasons", reasons)
             .put("defaultReason", settings.defaultReason)
             .put("defaultStatus", settings.defaultStatus.name)
@@ -270,17 +340,32 @@ class AttendanceRepository(context: Context) {
             .put("exemptColor", settings.exemptColor.name)
             .put("groupResultsByStatus", settings.groupResultsByStatus)
             .put("historyTitleMode", settings.historyTitleMode.name)
+            .put("showStudentNumbers", settings.showStudentNumbers)
+            .put("showClassStudentCount", settings.showClassStudentCount)
+            .put("showClassOperationHint", settings.showClassOperationHint)
+            .put("showRollCallProgress", settings.showRollCallProgress)
+            .put("showOperationHint", settings.showOperationHint)
+            .put("showStatusButton", settings.showStatusButton)
+            .put("showReasonsInRollCall", settings.showReasonsInRollCall)
+            .put("showResultSummary", settings.showResultSummary)
+            .put("showEmptyResultGroups", settings.showEmptyResultGroups)
+            .put("showHistoryStatistics", settings.showHistoryStatistics)
+            .put("confirmIncompleteAttendance", settings.confirmIncompleteAttendance)
+            .put("compactRollCallRows", settings.compactRollCallRows)
             .put("exportHeader", settings.exportHeader)
             .put("exportSummary", settings.exportSummary)
             .put("exportPresentStudents", settings.exportPresentStudents)
             .put("exportStudentNumber", settings.exportStudentNumber)
             .put("exportReason", settings.exportReason)
-        preferences.edit().putString(KEY_SETTINGS, json.toString()).apply()
     }
 
     private fun loadClasses(): List<ClassGroup> = runCatching {
-        val array = JSONArray(preferences.getString(KEY_CLASSES, "[]"))
-        buildList {
+        parseClasses(preferences.getString(KEY_CLASSES, "[]").orEmpty())
+    }.getOrDefault(emptyList())
+
+    private fun parseClasses(raw: String): List<ClassGroup> {
+        val array = JSONArray(raw)
+        return buildList {
             for (index in 0 until array.length()) {
                 val item = array.getJSONObject(index)
                 val studentArray = item.optJSONArray("students") ?: JSONArray()
@@ -306,11 +391,15 @@ class AttendanceRepository(context: Context) {
                 )
             }
         }
-    }.getOrDefault(emptyList())
+    }
 
     private fun loadSessions(): List<AttendanceSession> = runCatching {
-        val array = JSONArray(preferences.getString(KEY_SESSIONS, "[]"))
-        buildList {
+        parseSessions(preferences.getString(KEY_SESSIONS, "[]").orEmpty())
+    }.getOrDefault(emptyList())
+
+    private fun parseSessions(raw: String): List<AttendanceSession> {
+        val array = JSONArray(raw)
+        return buildList {
             for (index in 0 until array.length()) {
                 val item = array.getJSONObject(index)
                 val entryArray = item.optJSONArray("entries") ?: JSONArray()
@@ -340,11 +429,15 @@ class AttendanceRepository(context: Context) {
                 )
             }
         }
-    }.getOrDefault(emptyList())
+    }
 
     private fun loadSettings(): AppSettings = runCatching {
+        parseSettings(preferences.getString(KEY_SETTINGS, null))
+    }.getOrDefault(AppSettings())
+
+    private fun parseSettings(raw: String?): AppSettings {
         val defaults = AppSettings()
-        val raw = preferences.getString(KEY_SETTINGS, null) ?: return@runCatching defaults
+        if (raw == null) return defaults
         val json = JSONObject(raw)
         val reasonsArray = json.optJSONArray("absenceReasons")
         val reasons = if (reasonsArray == null) {
@@ -375,13 +468,28 @@ class AttendanceRepository(context: Context) {
             exemptColor = enumValueOrDefault(json.optString("exemptColor"), defaults.exemptColor),
             groupResultsByStatus = json.optBoolean("groupResultsByStatus", defaults.groupResultsByStatus),
             historyTitleMode = enumValueOrDefault(json.optString("historyTitleMode"), defaults.historyTitleMode),
+            showStudentNumbers = json.optBoolean("showStudentNumbers", defaults.showStudentNumbers),
+            showClassStudentCount = json.optBoolean("showClassStudentCount", defaults.showClassStudentCount),
+            showClassOperationHint = json.optBoolean("showClassOperationHint", defaults.showClassOperationHint),
+            showRollCallProgress = json.optBoolean("showRollCallProgress", defaults.showRollCallProgress),
+            showOperationHint = json.optBoolean("showOperationHint", defaults.showOperationHint),
+            showStatusButton = json.optBoolean("showStatusButton", defaults.showStatusButton),
+            showReasonsInRollCall = json.optBoolean("showReasonsInRollCall", defaults.showReasonsInRollCall),
+            showResultSummary = json.optBoolean("showResultSummary", defaults.showResultSummary),
+            showEmptyResultGroups = json.optBoolean("showEmptyResultGroups", defaults.showEmptyResultGroups),
+            showHistoryStatistics = json.optBoolean("showHistoryStatistics", defaults.showHistoryStatistics),
+            confirmIncompleteAttendance = json.optBoolean(
+                "confirmIncompleteAttendance",
+                defaults.confirmIncompleteAttendance,
+            ),
+            compactRollCallRows = json.optBoolean("compactRollCallRows", defaults.compactRollCallRows),
             exportHeader = json.optBoolean("exportHeader", defaults.exportHeader),
             exportSummary = json.optBoolean("exportSummary", defaults.exportSummary),
             exportPresentStudents = json.optBoolean("exportPresentStudents", defaults.exportPresentStudents),
             exportStudentNumber = json.optBoolean("exportStudentNumber", defaults.exportStudentNumber),
             exportReason = json.optBoolean("exportReason", defaults.exportReason),
         )
-    }.getOrDefault(AppSettings())
+    }
 
     companion object {
         private const val KEY_CLASSES = "classes"
@@ -402,6 +510,15 @@ private fun ClassAttendanceSettings.toJson(): JSONObject = JSONObject()
     .put("swipeLeftAction", swipeLeftAction.name)
     .put("swipeRightAction", swipeRightAction.name)
     .put("groupResultsByStatus", groupResultsByStatus)
+    .put("showStudentNumbers", showStudentNumbers)
+    .put("showRollCallProgress", showRollCallProgress)
+    .put("showOperationHint", showOperationHint)
+    .put("showStatusButton", showStatusButton)
+    .put("showReasonsInRollCall", showReasonsInRollCall)
+    .put("showResultSummary", showResultSummary)
+    .put("showEmptyResultGroups", showEmptyResultGroups)
+    .put("confirmIncompleteAttendance", confirmIncompleteAttendance)
+    .put("compactRollCallRows", compactRollCallRows)
 
 private fun JSONObject.toClassAttendanceSettings(): ClassAttendanceSettings {
     val defaults = ClassAttendanceSettings()
@@ -412,6 +529,18 @@ private fun JSONObject.toClassAttendanceSettings(): ClassAttendanceSettings {
         swipeLeftAction = enumValueOrDefault(optString("swipeLeftAction"), defaults.swipeLeftAction),
         swipeRightAction = enumValueOrDefault(optString("swipeRightAction"), defaults.swipeRightAction),
         groupResultsByStatus = optBoolean("groupResultsByStatus", defaults.groupResultsByStatus),
+        showStudentNumbers = optBoolean("showStudentNumbers", defaults.showStudentNumbers),
+        showRollCallProgress = optBoolean("showRollCallProgress", defaults.showRollCallProgress),
+        showOperationHint = optBoolean("showOperationHint", defaults.showOperationHint),
+        showStatusButton = optBoolean("showStatusButton", defaults.showStatusButton),
+        showReasonsInRollCall = optBoolean("showReasonsInRollCall", defaults.showReasonsInRollCall),
+        showResultSummary = optBoolean("showResultSummary", defaults.showResultSummary),
+        showEmptyResultGroups = optBoolean("showEmptyResultGroups", defaults.showEmptyResultGroups),
+        confirmIncompleteAttendance = optBoolean(
+            "confirmIncompleteAttendance",
+            defaults.confirmIncompleteAttendance,
+        ),
+        compactRollCallRows = optBoolean("compactRollCallRows", defaults.compactRollCallRows),
     )
 }
 

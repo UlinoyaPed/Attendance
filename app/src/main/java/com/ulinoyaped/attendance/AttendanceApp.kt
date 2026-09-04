@@ -81,8 +81,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Tab
-import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -119,6 +117,7 @@ import com.ulinoyaped.attendance.data.ClassGroup
 import com.ulinoyaped.attendance.data.ClassAttendanceSettings
 import com.ulinoyaped.attendance.data.GestureAction
 import com.ulinoyaped.attendance.data.HistoryTitleMode
+import com.ulinoyaped.attendance.data.DisplayOption
 import com.ulinoyaped.attendance.data.StatusColorOption
 import com.ulinoyaped.attendance.data.StatusIconOption
 import com.ulinoyaped.attendance.data.Student
@@ -179,14 +178,6 @@ private enum class SettingSelector {
     COLOR_ABSENT,
     COLOR_EXEMPT,
     HISTORY_TITLE,
-}
-
-private enum class SettingsTab(val label: String) {
-    OPERATIONS("操作"),
-    REASONS("原因"),
-    ICONS("外观"),
-    EXPORT("导出"),
-    HISTORY("历史"),
 }
 
 private enum class ClassSettingSelector {
@@ -251,6 +242,9 @@ fun AttendanceApp() {
             onSetStatusColor = repository::setStatusColor,
             onSetGroupResultsByStatus = repository::setGroupResultsByStatus,
             onSetHistoryTitleMode = repository::setHistoryTitleMode,
+            onSetDisplayOption = repository::setDisplayOption,
+            onExportBackup = repository::exportBackup,
+            onImportBackup = repository::importBackup,
             onSetExportHeader = repository::setExportHeader,
             onSetExportSummary = repository::setExportSummary,
             onSetExportPresentStudents = repository::setExportPresentStudents,
@@ -265,6 +259,7 @@ fun AttendanceApp() {
             } else {
                 ClassDetailScreen(
                     group = group,
+                    settings = settings,
                     sessions = sessions.filter { it.classId == group.id },
                     onBack = { screen = Screen.Root(RootTab.CLASSES) },
                     onAddStudent = { name, number -> repository.addStudent(group.id, name, number) },
@@ -274,6 +269,10 @@ fun AttendanceApp() {
                     onOpenResult = { screen = Screen.Result(group.id, it) },
                     onDeleteSession = repository::deleteSession,
                     onOpenSettings = { screen = Screen.ClassSettings(group.id) },
+                    onRenameClass = { repository.renameClass(group.id, it) },
+                    onUpdateStudent = { studentId, name, number ->
+                        repository.updateStudent(group.id, studentId, name, number)
+                    },
                 )
             }
         }
@@ -371,6 +370,9 @@ private fun RootScreen(
     onSetStatusColor: (AttendanceStatus, StatusColorOption) -> Unit,
     onSetGroupResultsByStatus: (Boolean) -> Unit,
     onSetHistoryTitleMode: (HistoryTitleMode) -> Unit,
+    onSetDisplayOption: (DisplayOption, Boolean) -> Unit,
+    onExportBackup: () -> String,
+    onImportBackup: (String) -> Boolean,
     onSetExportHeader: (Boolean) -> Unit,
     onSetExportSummary: (Boolean) -> Unit,
     onSetExportPresentStudents: (Boolean) -> Unit,
@@ -383,6 +385,7 @@ private fun RootScreen(
     when (selectedTab) {
         RootTab.CLASSES -> ClassesScreen(
             classes = classes,
+            settings = settings,
             onAddClass = onAddClass,
             onStartClass = onStartClass,
             onEditClass = onEditClass,
@@ -395,6 +398,7 @@ private fun RootScreen(
             onOpenResult = onOpenResult,
             onDeleteSession = onDeleteSession,
             titleMode = settings.historyTitleMode,
+            showStatistics = settings.showHistoryStatistics,
             bottomBar = bottomBar,
         )
         RootTab.SETTINGS -> SettingsScreen(
@@ -411,6 +415,9 @@ private fun RootScreen(
             onSetStatusColor = onSetStatusColor,
             onSetGroupResultsByStatus = onSetGroupResultsByStatus,
             onSetHistoryTitleMode = onSetHistoryTitleMode,
+            onSetDisplayOption = onSetDisplayOption,
+            onExportBackup = onExportBackup,
+            onImportBackup = onImportBackup,
             onSetExportHeader = onSetExportHeader,
             onSetExportSummary = onSetExportSummary,
             onSetExportPresentStudents = onSetExportPresentStudents,
@@ -459,6 +466,7 @@ private fun RootLargeTopBar(title: String) {
 @Composable
 private fun ClassesScreen(
     classes: List<ClassGroup>,
+    settings: AppSettings,
     onAddClass: (String) -> Unit,
     onStartClass: (String) -> Unit,
     onEditClass: (String) -> Unit,
@@ -490,13 +498,15 @@ private fun ClassesScreen(
                 contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 96.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                item {
-                    Text(
-                        "轻点班级立即开始点名，长按可编辑班级",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-                    )
+                if (settings.showClassOperationHint) {
+                    item {
+                        Text(
+                            "轻点班级立即开始点名，长按可编辑班级",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                        )
+                    }
                 }
                 items(classes, key = { it.id }) { group ->
                     Card(
@@ -535,11 +545,13 @@ private fun ClassesScreen(
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.SemiBold,
                                 )
-                                Text(
-                                    "${group.students.size} 名学生 · 点击开始",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                                if (settings.showClassStudentCount) {
+                                    Text(
+                                        "${group.students.size} 名学生 · 点击开始",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
                             Surface(
                                 modifier = Modifier.size(40.dp),
@@ -630,6 +642,7 @@ private fun ClassesScreen(
 @Composable
 private fun ClassDetailScreen(
     group: ClassGroup,
+    settings: AppSettings,
     sessions: List<AttendanceSession>,
     onBack: () -> Unit,
     onAddStudent: (String, String) -> Unit,
@@ -639,7 +652,10 @@ private fun ClassDetailScreen(
     onOpenResult: (String) -> Unit,
     onDeleteSession: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    onRenameClass: (String) -> Unit,
+    onUpdateStudent: (String, String, String) -> Unit,
 ) {
+    val effectiveSettings = settings.forClass(group)
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -648,6 +664,10 @@ private fun ClassDetailScreen(
     var showTextImport by remember { mutableStateOf(false) }
     var studentToDelete by remember { mutableStateOf<Student?>(null) }
     var sessionToDelete by remember { mutableStateOf<AttendanceSession?>(null) }
+    var showRenameClass by remember { mutableStateOf(false) }
+    var studentToEdit by remember { mutableStateOf<Student?>(null) }
+    var showRosterExport by remember { mutableStateOf(false) }
+    val rosterText = remember(group) { buildRosterExport(group) }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             val result = runCatching {
@@ -664,10 +684,24 @@ private fun ClassDetailScreen(
             }
         }
     }
+    val rosterSaveLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/csv"),
+    ) { uri ->
+        if (uri != null) {
+            val saved = runCatching {
+                context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(rosterText) }
+                    ?: error("无法写入文件")
+            }.isSuccess
+            scope.launch { snackbarHostState.showSnackbar(if (saved) "名单已保存" else "名单保存失败") }
+        }
+    }
 
     Scaffold(
         topBar = {
             SimpleBackBar(group.name, onBack) {
+                IconButton(onClick = { showRenameClass = true }) {
+                    Icon(Icons.Default.Edit, contentDescription = "修改班级名称")
+                }
                 IconButton(onClick = onOpenSettings) {
                     Icon(Icons.Default.Settings, contentDescription = "班级设置")
                 }
@@ -712,6 +746,16 @@ private fun ClassDetailScreen(
                     }
                 }
             }
+            item {
+                OutlinedButton(
+                    onClick = { showRosterExport = true },
+                    enabled = group.students.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("导出名单", modifier = Modifier.padding(start = 5.dp))
+                }
+            }
             item { SectionTitle("学生名单 · ${group.students.size}") }
             if (group.students.isEmpty()) {
                 item {
@@ -719,7 +763,12 @@ private fun ClassDetailScreen(
                 }
             } else {
                 items(group.students, key = { it.id }) { student ->
-                    StudentListItem(student = student, onDelete = { studentToDelete = student })
+                    StudentListItem(
+                        student = student,
+                        showStudentNumber = effectiveSettings.showStudentNumbers,
+                        onEdit = { studentToEdit = student },
+                        onDelete = { studentToDelete = student },
+                    )
                 }
             }
             if (sessions.isNotEmpty()) {
@@ -727,6 +776,7 @@ private fun ClassDetailScreen(
                 items(sessions, key = { it.id }) { session ->
                     HistoryItem(
                         session = session,
+                        showStatistics = settings.showHistoryStatistics,
                         onClick = { onOpenResult(session.id) },
                         onDelete = { sessionToDelete = session },
                     )
@@ -741,6 +791,79 @@ private fun ClassDetailScreen(
             onConfirm = { name, number ->
                 onAddStudent(name, number)
                 showAddStudent = false
+            },
+        )
+    }
+
+    if (showRenameClass) {
+        TextInputDialog(
+            title = "修改班级名称",
+            label = "班级名称",
+            confirmText = "保存",
+            initialValue = group.name,
+            onDismiss = { showRenameClass = false },
+            onConfirm = {
+                onRenameClass(it)
+                showRenameClass = false
+            },
+        )
+    }
+
+    studentToEdit?.let { student ->
+        AddStudentDialog(
+            title = "修改学生信息",
+            confirmText = "保存",
+            initialName = student.name,
+            initialNumber = student.studentNumber,
+            onDismiss = { studentToEdit = null },
+            onConfirm = { name, number ->
+                onUpdateStudent(student.id, name, number)
+                studentToEdit = null
+            },
+        )
+    }
+
+    if (showRosterExport) {
+        AlertDialog(
+            onDismissRequest = { showRosterExport = false },
+            title = { Text("导出班级名单") },
+            text = {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text(
+                        rosterText,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 12,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("${group.name}名单", rosterText))
+                        showRosterExport = false
+                        scope.launch { snackbarHostState.showSnackbar("名单已复制") }
+                    },
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("复制", modifier = Modifier.padding(start = 4.dp))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showRosterExport = false
+                        rosterSaveLauncher.launch("${group.name}-名单.csv")
+                    },
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("保存文件", modifier = Modifier.padding(start = 4.dp))
+                }
             },
         )
     }
@@ -860,7 +983,14 @@ private fun RollCallScreen(
             Surface(shadowElevation = 8.dp) {
                 Button(
                     onClick = {
-                        if (checked < group.students.size) showFinishDialog = true else finish()
+                        if (
+                            checked < group.students.size &&
+                            effectiveSettings.confirmIncompleteAttendance
+                        ) {
+                            showFinishDialog = true
+                        } else {
+                            finish()
+                        }
                     },
                     modifier = Modifier.fillMaxWidth().padding(16.dp).height(50.dp),
                 ) { Text("结束并查看结果") }
@@ -872,17 +1002,23 @@ private fun RollCallScreen(
             contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item {
-                Column(modifier = Modifier.padding(bottom = 6.dp)) {
-                    Text(
-                        "$checked / ${group.students.size} 已处理",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        "点按：${effectiveSettings.defaultStatus.label} · 长按：${effectiveSettings.longPressAction.label} · 左滑：${effectiveSettings.swipeLeftAction.label} · 右滑：${effectiveSettings.swipeRightAction.label}",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+            if (effectiveSettings.showRollCallProgress || effectiveSettings.showOperationHint) {
+                item {
+                    Column(modifier = Modifier.padding(bottom = 6.dp)) {
+                        if (effectiveSettings.showRollCallProgress) {
+                            Text(
+                                "$checked / ${group.students.size} 已处理",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                        }
+                        if (effectiveSettings.showOperationHint) {
+                            Text(
+                                "点按：${effectiveSettings.defaultStatus.label} · 长按：${effectiveSettings.longPressAction.label} · 左滑：${effectiveSettings.swipeLeftAction.label} · 右滑：${effectiveSettings.swipeRightAction.label}",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
                 }
             }
             items(group.students, key = { it.id }) { student ->
@@ -892,6 +1028,10 @@ private fun RollCallScreen(
                     mark = mark,
                     iconOption = mark?.status?.let { effectiveSettings.iconFor(it) },
                     colorOption = mark?.status?.let { effectiveSettings.colorFor(it) },
+                    showStudentNumber = effectiveSettings.showStudentNumbers,
+                    showReason = effectiveSettings.showReasonsInRollCall,
+                    showStatusButton = effectiveSettings.showStatusButton,
+                    compact = effectiveSettings.compactRollCallRows,
                     onTogglePresent = {
                         if (mark?.status == effectiveSettings.defaultStatus) {
                             marks.remove(student.id)
@@ -1015,31 +1155,37 @@ private fun ResultScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            item {
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(end = 4.dp),
-                ) {
-                    items(resultStatuses) { status ->
-                        SummaryCard(
-                            label = status.label,
-                            count = counts.getValue(status),
-                            iconOption = effectiveSettings.iconFor(status),
-                            colorOption = effectiveSettings.colorFor(status),
-                            modifier = Modifier.width(84.dp),
-                        )
+            if (effectiveSettings.showResultSummary) {
+                item {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(end = 4.dp),
+                    ) {
+                        items(resultStatuses) { status ->
+                            SummaryCard(
+                                label = status.label,
+                                count = counts.getValue(status),
+                                iconOption = effectiveSettings.iconFor(status),
+                                colorOption = effectiveSettings.colorFor(status),
+                                modifier = Modifier.width(84.dp),
+                            )
+                        }
                     }
                 }
             }
             if (effectiveSettings.groupResultsByStatus) {
                 resultStatuses.forEach { status ->
                     val entries = session.entries.filter { it.status == status }
-                    if (entries.isNotEmpty()) {
+                    if (entries.isNotEmpty() || effectiveSettings.showEmptyResultGroups) {
                         item(key = "section-${status.name}") {
                             SectionTitle("${status.label} · ${entries.size}")
                         }
-                        items(entries, key = { "${status.name}-${it.studentId}" }) { entry ->
-                            ResultEntryItem(entry, effectiveSettings)
+                        if (entries.isEmpty()) {
+                            item(key = "empty-${status.name}") { HintCard("此分类暂无学生") }
+                        } else {
+                            items(entries, key = { "${status.name}-${it.studentId}" }) { entry ->
+                                ResultEntryItem(entry, effectiveSettings)
+                            }
                         }
                     }
                 }
@@ -1106,6 +1252,7 @@ private fun HistoryScreen(
     onOpenResult: (String, String) -> Unit,
     onDeleteSession: (String) -> Unit,
     titleMode: HistoryTitleMode,
+    showStatistics: Boolean,
     bottomBar: @Composable () -> Unit,
 ) {
     val classNames = classes.associate { it.id to it.name }
@@ -1131,6 +1278,7 @@ private fun HistoryScreen(
                         className = classNames[session.classId].orEmpty(),
                         session = session,
                         titleMode = titleMode,
+                        showStatistics = showStatistics,
                         onClick = { onOpenResult(session.classId, session.id) },
                         onDelete = { sessionToDelete = session },
                     )
@@ -1166,6 +1314,9 @@ private fun SettingsScreen(
     onSetStatusColor: (AttendanceStatus, StatusColorOption) -> Unit,
     onSetGroupResultsByStatus: (Boolean) -> Unit,
     onSetHistoryTitleMode: (HistoryTitleMode) -> Unit,
+    onSetDisplayOption: (DisplayOption, Boolean) -> Unit,
+    onExportBackup: () -> String,
+    onImportBackup: (String) -> Boolean,
     onSetExportHeader: (Boolean) -> Unit,
     onSetExportSummary: (Boolean) -> Unit,
     onSetExportPresentStudents: (Boolean) -> Unit,
@@ -1175,26 +1326,37 @@ private fun SettingsScreen(
 ) {
     var showAddReason by remember { mutableStateOf(false) }
     var selector by remember { mutableStateOf<SettingSelector?>(null) }
-    var selectedTab by remember { mutableStateOf(SettingsTab.OPERATIONS) }
-    Scaffold(
-        topBar = {
-            Column {
-                RootLargeTopBar("设置")
-                ScrollableTabRow(
-                    selectedTabIndex = selectedTab.ordinal,
-                    edgePadding = 12.dp,
-                    divider = {},
-                ) {
-                    SettingsTab.entries.forEach { tab ->
-                        Tab(
-                            selected = selectedTab == tab,
-                            onClick = { selectedTab = tab },
-                            text = { Text(tab.label) },
-                        )
-                    }
-                }
+    var showRestoreConfirmation by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val backupExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        if (uri != null) {
+            val saved = runCatching {
+                context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(onExportBackup()) }
+                    ?: error("无法写入文件")
+            }.isSuccess
+            scope.launch { snackbarHostState.showSnackbar(if (saved) "备份已保存" else "备份保存失败") }
+        }
+    }
+    val backupImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val content = runCatching {
+                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                    ?: error("无法读取文件")
+            }.getOrNull()
+            if (content == null) {
+                scope.launch { snackbarHostState.showSnackbar("备份读取失败") }
+            } else {
+                showRestoreConfirmation = content
             }
-        },
+        }
+    }
+    Scaffold(
+        topBar = { RootLargeTopBar("设置") },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = bottomBar,
     ) { padding ->
         LazyColumn(
@@ -1202,8 +1364,6 @@ private fun SettingsScreen(
             contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 28.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            when (selectedTab) {
-                SettingsTab.OPERATIONS -> {
                     item { SectionTitle("点名操作") }
                     item {
                         SettingsGroup {
@@ -1240,9 +1400,70 @@ private fun SettingsScreen(
                             modifier = Modifier.padding(horizontal = 4.dp),
                         )
                     }
-                }
-
-                SettingsTab.REASONS -> {
+                    item { SectionTitle("界面显示") }
+                    item {
+                        SettingsGroup {
+                            SwitchSettingRow(
+                                "显示班级人数",
+                                settings.showClassStudentCount,
+                            ) { onSetDisplayOption(DisplayOption.CLASS_STUDENT_COUNT, it) }
+                            HorizontalDivider()
+                            SwitchSettingRow(
+                                "显示班级页操作提示",
+                                settings.showClassOperationHint,
+                            ) { onSetDisplayOption(DisplayOption.CLASS_OPERATION_HINT, it) }
+                            HorizontalDivider()
+                            SwitchSettingRow(
+                                "显示学生学号",
+                                settings.showStudentNumbers,
+                            ) { onSetDisplayOption(DisplayOption.STUDENT_NUMBERS, it) }
+                            HorizontalDivider()
+                            SwitchSettingRow(
+                                "显示已处理进度",
+                                settings.showRollCallProgress,
+                            ) { onSetDisplayOption(DisplayOption.ROLL_CALL_PROGRESS, it) }
+                            HorizontalDivider()
+                            SwitchSettingRow(
+                                "显示点名操作提示",
+                                settings.showOperationHint,
+                            ) { onSetDisplayOption(DisplayOption.OPERATION_HINT, it) }
+                            HorizontalDivider()
+                            SwitchSettingRow(
+                                "显示状态按钮",
+                                settings.showStatusButton,
+                            ) { onSetDisplayOption(DisplayOption.STATUS_BUTTON, it) }
+                            HorizontalDivider()
+                            SwitchSettingRow(
+                                "名单中显示原因",
+                                settings.showReasonsInRollCall,
+                            ) { onSetDisplayOption(DisplayOption.REASONS_IN_ROLL_CALL, it) }
+                            HorizontalDivider()
+                            SwitchSettingRow(
+                                "紧凑点名列表",
+                                settings.compactRollCallRows,
+                            ) { onSetDisplayOption(DisplayOption.COMPACT_ROLL_CALL, it) }
+                            HorizontalDivider()
+                            SwitchSettingRow(
+                                "未点完时二次确认",
+                                settings.confirmIncompleteAttendance,
+                            ) { onSetDisplayOption(DisplayOption.CONFIRM_INCOMPLETE, it) }
+                            HorizontalDivider()
+                            SwitchSettingRow(
+                                "显示结果统计卡",
+                                settings.showResultSummary,
+                            ) { onSetDisplayOption(DisplayOption.RESULT_SUMMARY, it) }
+                            HorizontalDivider()
+                            SwitchSettingRow(
+                                "显示空结果分类",
+                                settings.showEmptyResultGroups,
+                            ) { onSetDisplayOption(DisplayOption.EMPTY_RESULT_GROUPS, it) }
+                            HorizontalDivider()
+                            SwitchSettingRow(
+                                "显示历史统计",
+                                settings.showHistoryStatistics,
+                            ) { onSetDisplayOption(DisplayOption.HISTORY_STATISTICS, it) }
+                        }
+                    }
                     item { SectionTitle("未到原因") }
                     item {
                         SettingsGroup {
@@ -1314,9 +1535,6 @@ private fun SettingsScreen(
                             }
                         }
                     }
-                }
-
-                SettingsTab.ICONS -> {
                     item { SectionTitle("状态外观") }
                     item {
                         SettingsGroup {
@@ -1351,9 +1569,6 @@ private fun SettingsScreen(
                             )
                         }
                     }
-                }
-
-                SettingsTab.EXPORT -> {
                     item { SectionTitle("结果排列") }
                     item {
                         SettingsGroup {
@@ -1378,9 +1593,6 @@ private fun SettingsScreen(
                             SwitchSettingRow("原因或备注", settings.exportReason, onSetExportReason)
                         }
                     }
-                }
-
-                SettingsTab.HISTORY -> {
                     item { SectionTitle("历史记录") }
                     item {
                         SettingsGroup {
@@ -1399,8 +1611,26 @@ private fun SettingsScreen(
                             modifier = Modifier.padding(horizontal = 4.dp),
                         )
                     }
-                }
-            }
+                    item { SectionTitle("数据管理") }
+                    item {
+                        SettingsGroup {
+                            ActionSettingRow(
+                                title = "导出完整备份",
+                                subtitle = "保存班级、名单、历史记录和全部设置",
+                                icon = Icons.Default.Save,
+                                onClick = { backupExportLauncher.launch("attendance-backup.json") },
+                            )
+                            HorizontalDivider()
+                            ActionSettingRow(
+                                title = "从备份恢复",
+                                subtitle = "恢复 JSON 备份并覆盖当前全部数据",
+                                icon = Icons.Default.FileUpload,
+                                onClick = {
+                                    backupImportLauncher.launch(arrayOf("application/json", "text/json", "text/plain"))
+                                },
+                            )
+                        }
+                    }
         }
     }
 
@@ -1413,6 +1643,28 @@ private fun SettingsScreen(
             onConfirm = {
                 onAddReason(it)
                 showAddReason = false
+            },
+        )
+    }
+
+    showRestoreConfirmation?.let { backupText ->
+        AlertDialog(
+            onDismissRequest = { showRestoreConfirmation = null },
+            title = { Text("恢复完整备份？") },
+            text = { Text("当前班级、名单、历史记录和设置将被备份文件覆盖。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val restored = onImportBackup(backupText)
+                        showRestoreConfirmation = null
+                        scope.launch {
+                            snackbarHostState.showSnackbar(if (restored) "备份恢复完成" else "备份格式无效")
+                        }
+                    },
+                ) { Text("恢复") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRestoreConfirmation = null }) { Text("取消") }
             },
         )
     }
@@ -1577,6 +1829,46 @@ private fun ClassSettingsScreen(
                         ) { draft = draft.copy(groupResultsByStatus = it) }
                     }
                 }
+                item { SectionTitle("界面显示") }
+                item {
+                    SettingsGroup {
+                        SwitchSettingRow("显示学生学号", draft.showStudentNumbers) {
+                            draft = draft.copy(showStudentNumbers = it)
+                        }
+                        HorizontalDivider()
+                        SwitchSettingRow("显示已处理进度", draft.showRollCallProgress) {
+                            draft = draft.copy(showRollCallProgress = it)
+                        }
+                        HorizontalDivider()
+                        SwitchSettingRow("显示点名操作提示", draft.showOperationHint) {
+                            draft = draft.copy(showOperationHint = it)
+                        }
+                        HorizontalDivider()
+                        SwitchSettingRow("显示状态按钮", draft.showStatusButton) {
+                            draft = draft.copy(showStatusButton = it)
+                        }
+                        HorizontalDivider()
+                        SwitchSettingRow("名单中显示原因", draft.showReasonsInRollCall) {
+                            draft = draft.copy(showReasonsInRollCall = it)
+                        }
+                        HorizontalDivider()
+                        SwitchSettingRow("紧凑点名列表", draft.compactRollCallRows) {
+                            draft = draft.copy(compactRollCallRows = it)
+                        }
+                        HorizontalDivider()
+                        SwitchSettingRow("未点完时二次确认", draft.confirmIncompleteAttendance) {
+                            draft = draft.copy(confirmIncompleteAttendance = it)
+                        }
+                        HorizontalDivider()
+                        SwitchSettingRow("显示结果统计卡", draft.showResultSummary) {
+                            draft = draft.copy(showResultSummary = it)
+                        }
+                        HorizontalDivider()
+                        SwitchSettingRow("显示空结果分类", draft.showEmptyResultGroups) {
+                            draft = draft.copy(showEmptyResultGroups = it)
+                        }
+                    }
+                }
             } else {
                 item { HintCard("当前跟随全局设置。启用后，这个班级可以单独指定点按、手势、默认原因和结果排列。") }
             }
@@ -1632,6 +1924,39 @@ private fun SettingRow(title: String, value: String, onClick: () -> Unit) {
         Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
         Text(value, color = MaterialTheme.colorScheme.primary)
         Text("  ›", fontSize = 22.sp)
+    }
+}
+
+@Composable
+private fun ActionSettingRow(
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(16.dp, 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.secondaryContainer,
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                modifier = Modifier.padding(9.dp).size(20.dp),
+            )
+        }
+        Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text("›", fontSize = 22.sp)
     }
 }
 
@@ -1838,6 +2163,10 @@ private fun RollCallItem(
     mark: Mark?,
     iconOption: StatusIconOption?,
     colorOption: StatusColorOption?,
+    showStudentNumber: Boolean,
+    showReason: Boolean,
+    showStatusButton: Boolean,
+    compact: Boolean,
     onTogglePresent: () -> Unit,
     onLongPress: () -> Unit,
     onSwipeLeft: () -> Unit,
@@ -1902,7 +2231,10 @@ private fun RollCallItem(
             colors = CardDefaults.cardColors(containerColor = container),
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(14.dp, 10.dp),
+                modifier = Modifier.fillMaxWidth().padding(
+                    horizontal = if (compact) 12.dp else 14.dp,
+                    vertical = if (compact) 5.dp else 10.dp,
+                ),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
@@ -1926,9 +2258,9 @@ private fun RollCallItem(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(student.name, style = MaterialTheme.typography.titleMedium)
                     val detail = listOfNotNull(
-                        student.studentNumber.takeIf(String::isNotBlank),
+                        student.studentNumber.takeIf { showStudentNumber && it.isNotBlank() },
                         mark?.status?.label,
-                        mark?.reason?.takeIf(String::isNotBlank),
+                        mark?.reason?.takeIf { showReason && it.isNotBlank() },
                     ).joinToString(" · ")
                     if (detail.isNotEmpty()) {
                         Text(
@@ -1940,14 +2272,21 @@ private fun RollCallItem(
                         )
                     }
                 }
-                TextButton(onClick = onEdit) { Text("状态") }
+                if (showStatusButton) {
+                    TextButton(onClick = onEdit) { Text("状态") }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun StudentListItem(student: Student, onDelete: () -> Unit) {
+private fun StudentListItem(
+    student: Student,
+    showStudentNumber: Boolean,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
@@ -1958,7 +2297,7 @@ private fun StudentListItem(student: Student, onDelete: () -> Unit) {
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(student.name, style = MaterialTheme.typography.titleMedium)
-                if (student.studentNumber.isNotBlank()) {
+                if (showStudentNumber && student.studentNumber.isNotBlank()) {
                     Text(
                         student.studentNumber,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1966,13 +2305,21 @@ private fun StudentListItem(student: Student, onDelete: () -> Unit) {
                     )
                 }
             }
+            IconButton(onClick = onEdit) {
+                Icon(Icons.Default.Edit, contentDescription = "修改学生信息")
+            }
             TextButton(onClick = onDelete) { Text("移除") }
         }
     }
 }
 
 @Composable
-private fun HistoryItem(session: AttendanceSession, onClick: () -> Unit, onDelete: () -> Unit) {
+private fun HistoryItem(
+    session: AttendanceSession,
+    showStatistics: Boolean,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+) {
     val absent = session.entries.count { it.status == AttendanceStatus.ABSENT }
     val leave = session.entries.count { it.status == AttendanceStatus.LEAVE }
     val late = session.entries.count { it.status == AttendanceStatus.LATE }
@@ -1987,11 +2334,13 @@ private fun HistoryItem(session: AttendanceSession, onClick: () -> Unit, onDelet
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(formatTime(session.createdAt), style = MaterialTheme.typography.titleSmall)
-                Text(
-                    "共 ${session.entries.size} 人 · 缺勤 $absent · 请假 $leave · 迟到 $late",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (showStatistics) {
+                    Text(
+                        "共 ${session.entries.size} 人 · 缺勤 $absent · 请假 $leave · 迟到 $late",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             IconButton(onClick = onDelete) {
                 Icon(Icons.Default.Delete, contentDescription = "删除记录")
@@ -2005,6 +2354,7 @@ private fun GlobalHistoryItem(
     className: String,
     session: AttendanceSession,
     titleMode: HistoryTitleMode,
+    showStatistics: Boolean,
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -2026,7 +2376,11 @@ private fun GlobalHistoryItem(
             Column(modifier = Modifier.weight(1f)) {
                 Text(headline, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "$detailPrefix · 到 $present · 缺勤 $absent · 不参与 $exempt",
+                    if (showStatistics) {
+                        "$detailPrefix · 到 $present · 缺勤 $absent · 不参与 $exempt"
+                    } else {
+                        detailPrefix
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -2070,7 +2424,7 @@ private fun ResultEntryItem(entry: AttendanceEntry, settings: AppSettings) {
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(entry.studentName, style = MaterialTheme.typography.titleMedium)
-                if (entry.studentNumber.isNotBlank()) {
+                if (settings.showStudentNumbers && entry.studentNumber.isNotBlank()) {
                     Text(
                         entry.studentNumber,
                         style = MaterialTheme.typography.bodySmall,
@@ -2093,7 +2447,7 @@ private fun CompactResultItem(entry: AttendanceEntry, settings: AppSettings) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(entry.studentName, modifier = Modifier.weight(1f))
-        if (entry.studentNumber.isNotBlank()) {
+        if (settings.showStudentNumbers && entry.studentNumber.isNotBlank()) {
             Text(
                 entry.studentNumber,
                 modifier = Modifier.padding(end = 10.dp),
@@ -2230,14 +2584,18 @@ private fun StatusDialog(
 
 @Composable
 private fun AddStudentDialog(
+    title: String = "添加学生",
+    confirmText: String = "添加",
+    initialName: String = "",
+    initialNumber: String = "",
     onDismiss: () -> Unit,
     onConfirm: (String, String) -> Unit,
 ) {
-    var name by remember { mutableStateOf("") }
-    var number by remember { mutableStateOf("") }
+    var name by remember(initialName) { mutableStateOf(initialName) }
+    var number by remember(initialNumber) { mutableStateOf(initialNumber) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("添加学生") },
+        title = { Text(title) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
@@ -2258,7 +2616,7 @@ private fun AddStudentDialog(
             }
         },
         confirmButton = {
-            TextButton(enabled = name.isNotBlank(), onClick = { onConfirm(name, number) }) { Text("添加") }
+            TextButton(enabled = name.isNotBlank(), onClick = { onConfirm(name, number) }) { Text(confirmText) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
@@ -2304,10 +2662,11 @@ private fun TextInputDialog(
     title: String,
     label: String,
     confirmText: String,
+    initialValue: String = "",
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
-    var value by remember { mutableStateOf("") }
+    var value by remember(initialValue) { mutableStateOf(initialValue) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -2416,6 +2775,21 @@ private fun statusUsesReason(status: AttendanceStatus): Boolean = status in setO
     AttendanceStatus.LEAVE,
     AttendanceStatus.ABSENT,
 )
+
+private fun buildRosterExport(group: ClassGroup): String = buildString {
+    appendLine("学号,姓名")
+    group.students.forEach { student ->
+        append(csvCell(student.studentNumber))
+        append(',')
+        appendLine(csvCell(student.name))
+    }
+}.trimEnd()
+
+private fun csvCell(value: String): String = if (value.any { it == ',' || it == '"' || it == '\n' }) {
+    "\"${value.replace("\"", "\"\"")}\""
+} else {
+    value
+}
 
 private fun buildAttendanceExport(
     group: ClassGroup,

@@ -75,6 +75,21 @@ enum class HistoryTitleMode(val label: String) {
     TIME("点名时间"),
 }
 
+enum class DisplayOption {
+    STUDENT_NUMBERS,
+    CLASS_STUDENT_COUNT,
+    CLASS_OPERATION_HINT,
+    ROLL_CALL_PROGRESS,
+    OPERATION_HINT,
+    STATUS_BUTTON,
+    REASONS_IN_ROLL_CALL,
+    RESULT_SUMMARY,
+    EMPTY_RESULT_GROUPS,
+    HISTORY_STATISTICS,
+    CONFIRM_INCOMPLETE,
+    COMPACT_ROLL_CALL,
+}
+
 data class ClassAttendanceSettings(
     val defaultReason: String = "",
     val defaultStatus: AttendanceStatus = AttendanceStatus.PRESENT,
@@ -82,6 +97,15 @@ data class ClassAttendanceSettings(
     val swipeLeftAction: GestureAction = GestureAction.ABSENT,
     val swipeRightAction: GestureAction = GestureAction.PRESENT,
     val groupResultsByStatus: Boolean = true,
+    val showStudentNumbers: Boolean = true,
+    val showRollCallProgress: Boolean = true,
+    val showOperationHint: Boolean = true,
+    val showStatusButton: Boolean = true,
+    val showReasonsInRollCall: Boolean = true,
+    val showResultSummary: Boolean = true,
+    val showEmptyResultGroups: Boolean = false,
+    val confirmIncompleteAttendance: Boolean = true,
+    val compactRollCallRows: Boolean = false,
 )
 
 data class AppSettings(
@@ -103,6 +127,18 @@ data class AppSettings(
     val exemptColor: StatusColorOption = StatusColorOption.GRAY,
     val groupResultsByStatus: Boolean = true,
     val historyTitleMode: HistoryTitleMode = HistoryTitleMode.CLASS_NAME,
+    val showStudentNumbers: Boolean = true,
+    val showClassStudentCount: Boolean = true,
+    val showClassOperationHint: Boolean = true,
+    val showRollCallProgress: Boolean = true,
+    val showOperationHint: Boolean = true,
+    val showStatusButton: Boolean = true,
+    val showReasonsInRollCall: Boolean = true,
+    val showResultSummary: Boolean = true,
+    val showEmptyResultGroups: Boolean = false,
+    val showHistoryStatistics: Boolean = true,
+    val confirmIncompleteAttendance: Boolean = true,
+    val compactRollCallRows: Boolean = false,
     val exportHeader: Boolean = true,
     val exportSummary: Boolean = true,
     val exportPresentStudents: Boolean = true,
@@ -137,6 +173,15 @@ fun AppSettings.forClass(group: ClassGroup): AppSettings {
         swipeLeftAction = custom.swipeLeftAction,
         swipeRightAction = custom.swipeRightAction,
         groupResultsByStatus = custom.groupResultsByStatus,
+        showStudentNumbers = custom.showStudentNumbers,
+        showRollCallProgress = custom.showRollCallProgress,
+        showOperationHint = custom.showOperationHint,
+        showStatusButton = custom.showStatusButton,
+        showReasonsInRollCall = custom.showReasonsInRollCall,
+        showResultSummary = custom.showResultSummary,
+        showEmptyResultGroups = custom.showEmptyResultGroups,
+        confirmIncompleteAttendance = custom.confirmIncompleteAttendance,
+        compactRollCallRows = custom.compactRollCallRows,
     )
 }
 
@@ -147,6 +192,15 @@ fun AppSettings.toClassSettings(): ClassAttendanceSettings = ClassAttendanceSett
     swipeLeftAction = swipeLeftAction,
     swipeRightAction = swipeRightAction,
     groupResultsByStatus = groupResultsByStatus,
+    showStudentNumbers = showStudentNumbers,
+    showRollCallProgress = showRollCallProgress,
+    showOperationHint = showOperationHint,
+    showStatusButton = showStatusButton,
+    showReasonsInRollCall = showReasonsInRollCall,
+    showResultSummary = showResultSummary,
+    showEmptyResultGroups = showEmptyResultGroups,
+    confirmIncompleteAttendance = confirmIncompleteAttendance,
+    compactRollCallRows = compactRollCallRows,
 )
 
 data class ImportedStudent(
