@@ -7,10 +7,12 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animate
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,18 +22,23 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.matchParentSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -72,15 +79,15 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -91,11 +98,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ulinoyaped.attendance.data.AttendanceEntry
@@ -112,6 +122,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 private sealed interface Screen {
     data class Root(val tab: RootTab) : Screen
@@ -151,6 +162,13 @@ private enum class SettingSelector {
     ICON_LATE,
     ICON_LEAVE,
     ICON_ABSENT,
+}
+
+private enum class SettingsTab(val label: String) {
+    OPERATIONS("操作"),
+    REASONS("原因"),
+    ICONS("图标"),
+    EXPORT("导出"),
 }
 
 @Composable
@@ -196,6 +214,7 @@ fun AttendanceApp() {
             onDeleteSession = repository::deleteSession,
             onAddReason = repository::addAbsenceReason,
             onRemoveReason = repository::removeAbsenceReason,
+            onMoveReason = repository::moveAbsenceReason,
             onSetDefaultReason = repository::setDefaultReason,
             onSetDefaultStatus = repository::setDefaultStatus,
             onSetLongPressAction = repository::setLongPressAction,
@@ -294,6 +313,7 @@ private fun RootScreen(
     onDeleteSession: (String) -> Unit,
     onAddReason: (String) -> Unit,
     onRemoveReason: (String) -> Unit,
+    onMoveReason: (Int, Int) -> Unit,
     onSetDefaultReason: (String) -> Unit,
     onSetDefaultStatus: (AttendanceStatus) -> Unit,
     onSetLongPressAction: (GestureAction) -> Unit,
@@ -329,6 +349,7 @@ private fun RootScreen(
             settings = settings,
             onAddReason = onAddReason,
             onRemoveReason = onRemoveReason,
+            onMoveReason = onMoveReason,
             onSetDefaultReason = onSetDefaultReason,
             onSetDefaultStatus = onSetDefaultStatus,
             onSetLongPressAction = onSetLongPressAction,
@@ -1048,6 +1069,7 @@ private fun SettingsScreen(
     settings: AppSettings,
     onAddReason: (String) -> Unit,
     onRemoveReason: (String) -> Unit,
+    onMoveReason: (Int, Int) -> Unit,
     onSetDefaultReason: (String) -> Unit,
     onSetDefaultStatus: (AttendanceStatus) -> Unit,
     onSetLongPressAction: (GestureAction) -> Unit,
@@ -1063,8 +1085,22 @@ private fun SettingsScreen(
 ) {
     var showAddReason by remember { mutableStateOf(false) }
     var selector by remember { mutableStateOf<SettingSelector?>(null) }
+    var selectedTab by remember { mutableStateOf(SettingsTab.OPERATIONS) }
     Scaffold(
-        topBar = { RootLargeTopBar("设置") },
+        topBar = {
+            Column {
+                RootLargeTopBar("设置")
+                TabRow(selectedTabIndex = selectedTab.ordinal) {
+                    SettingsTab.entries.forEach { tab ->
+                        Tab(
+                            selected = selectedTab == tab,
+                            onClick = { selectedTab = tab },
+                            text = { Text(tab.label) },
+                        )
+                    }
+                }
+            }
+        },
         bottomBar = bottomBar,
     ) { padding ->
         LazyColumn(
@@ -1072,100 +1108,133 @@ private fun SettingsScreen(
             contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 28.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item { SectionTitle("点名操作") }
-            item {
-                SettingsGroup {
-                    SettingRow(
-                        title = "点按默认选择",
-                        value = settings.defaultStatus.label,
-                        onClick = { selector = SettingSelector.DEFAULT_STATUS },
-                    )
-                    HorizontalDivider()
-                    SettingRow(
-                        title = "默认未到原因",
-                        value = settings.defaultReason.ifBlank { "不预填" },
-                        onClick = { selector = SettingSelector.DEFAULT_REASON },
-                    )
-                    HorizontalDivider()
-                    SettingRow(
-                        title = "长按姓名",
-                        value = settings.longPressAction.label,
-                        onClick = { selector = SettingSelector.LONG_PRESS },
-                    )
-                    HorizontalDivider()
-                    SettingRow(
-                        title = "向左滑动",
-                        value = settings.swipeLeftAction.label,
-                        onClick = { selector = SettingSelector.SWIPE_LEFT },
-                    )
-                    HorizontalDivider()
-                    SettingRow(
-                        title = "向右滑动",
-                        value = settings.swipeRightAction.label,
-                        onClick = { selector = SettingSelector.SWIPE_RIGHT },
-                    )
+            when (selectedTab) {
+                SettingsTab.OPERATIONS -> {
+                    item { SectionTitle("点名操作") }
+                    item {
+                        SettingsGroup {
+                            SettingRow(
+                                title = "点按默认选择",
+                                value = settings.defaultStatus.label,
+                                onClick = { selector = SettingSelector.DEFAULT_STATUS },
+                            )
+                            HorizontalDivider()
+                            SettingRow(
+                                title = "长按姓名",
+                                value = settings.longPressAction.label,
+                                onClick = { selector = SettingSelector.LONG_PRESS },
+                            )
+                            HorizontalDivider()
+                            SettingRow(
+                                title = "向左滑动",
+                                value = settings.swipeLeftAction.label,
+                                onClick = { selector = SettingSelector.SWIPE_LEFT },
+                            )
+                            HorizontalDivider()
+                            SettingRow(
+                                title = "向右滑动",
+                                value = settings.swipeRightAction.label,
+                                onClick = { selector = SettingSelector.SWIPE_RIGHT },
+                            )
+                        }
+                    }
+                    item {
+                        Text(
+                            "再次点按相同状态会清除标记。左右滑动需要明确的横向手势。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 4.dp),
+                        )
+                    }
                 }
-            }
-            item {
-                Text(
-                    "再次点按相同的默认状态会清除标记。滑动操作完成后卡片会自动回位。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 4.dp),
-                )
-            }
-            item { SectionTitle("状态图标") }
-            item {
-                SettingsGroup {
-                    IconSettingRow("到场", settings.presentIcon) { selector = SettingSelector.ICON_PRESENT }
-                    HorizontalDivider()
-                    IconSettingRow("迟到", settings.lateIcon) { selector = SettingSelector.ICON_LATE }
-                    HorizontalDivider()
-                    IconSettingRow("请假", settings.leaveIcon) { selector = SettingSelector.ICON_LEAVE }
-                    HorizontalDivider()
-                    IconSettingRow("缺勤", settings.absentIcon) { selector = SettingSelector.ICON_ABSENT }
-                }
-            }
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    SectionTitle("常用未到原因")
-                    Spacer(Modifier.weight(1f))
-                    TextButton(onClick = { showAddReason = true }) { Text("添加") }
-                }
-            }
-            if (settings.absenceReasons.isEmpty()) {
-                item { HintCard("暂未设置常用原因。点名时仍可手动输入原因。") }
-            } else {
-                items(settings.absenceReasons, key = { it }) { reason ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                    ) {
+
+                SettingsTab.REASONS -> {
+                    item { SectionTitle("未到原因") }
+                    item {
+                        SettingsGroup {
+                            SettingRow(
+                                title = "默认未到原因",
+                                value = settings.defaultReason.ifBlank { "不预填" },
+                                onClick = { selector = SettingSelector.DEFAULT_REASON },
+                            )
+                        }
+                    }
+                    item {
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp),
+                            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(reason, modifier = Modifier.weight(1f))
-                            TextButton(onClick = { onRemoveReason(reason) }) { Text("删除") }
+                            SectionTitle("常用原因顺序")
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = { showAddReason = true }) { Text("添加") }
+                        }
+                    }
+                    if (settings.absenceReasons.isEmpty()) {
+                        item { HintCard("暂未设置常用原因。点名时仍可手动输入原因。") }
+                    } else {
+                        itemsIndexed(settings.absenceReasons, key = { _, reason -> reason }) { index, reason ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                                ),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(reason, modifier = Modifier.weight(1f))
+                                    IconButton(
+                                        enabled = index > 0,
+                                        onClick = { onMoveReason(index, index - 1) },
+                                    ) {
+                                        Icon(Icons.Default.ArrowUpward, contentDescription = "上移")
+                                    }
+                                    IconButton(
+                                        enabled = index < settings.absenceReasons.lastIndex,
+                                        onClick = { onMoveReason(index, index + 1) },
+                                    ) {
+                                        Icon(Icons.Default.ArrowDownward, contentDescription = "下移")
+                                    }
+                                    IconButton(onClick = { onRemoveReason(reason) }) {
+                                        Icon(Icons.Default.Delete, contentDescription = "删除")
+                                    }
+                                }
+                            }
                         }
                     }
                 }
-            }
-            item { SectionTitle("文本导出内容") }
-            item {
-                SettingsGroup {
-                    SwitchSettingRow("班级与点名时间", settings.exportHeader, onSetExportHeader)
-                    HorizontalDivider()
-                    SwitchSettingRow("到勤统计", settings.exportSummary, onSetExportSummary)
-                    HorizontalDivider()
-                    SwitchSettingRow("到场学生明细", settings.exportPresentStudents, onSetExportPresentStudents)
-                    HorizontalDivider()
-                    SwitchSettingRow("学生学号", settings.exportStudentNumber, onSetExportStudentNumber)
-                    HorizontalDivider()
-                    SwitchSettingRow("原因或备注", settings.exportReason, onSetExportReason)
+
+                SettingsTab.ICONS -> {
+                    item { SectionTitle("状态图标") }
+                    item {
+                        SettingsGroup {
+                            IconSettingRow("到场", settings.presentIcon) { selector = SettingSelector.ICON_PRESENT }
+                            HorizontalDivider()
+                            IconSettingRow("迟到", settings.lateIcon) { selector = SettingSelector.ICON_LATE }
+                            HorizontalDivider()
+                            IconSettingRow("请假", settings.leaveIcon) { selector = SettingSelector.ICON_LEAVE }
+                            HorizontalDivider()
+                            IconSettingRow("缺勤", settings.absentIcon) { selector = SettingSelector.ICON_ABSENT }
+                        }
+                    }
+                }
+
+                SettingsTab.EXPORT -> {
+                    item { SectionTitle("文本导出内容") }
+                    item {
+                        SettingsGroup {
+                            SwitchSettingRow("班级与点名时间", settings.exportHeader, onSetExportHeader)
+                            HorizontalDivider()
+                            SwitchSettingRow("到勤统计", settings.exportSummary, onSetExportSummary)
+                            HorizontalDivider()
+                            SwitchSettingRow("到场学生明细", settings.exportPresentStudents, onSetExportPresentStudents)
+                            HorizontalDivider()
+                            SwitchSettingRow("学生学号", settings.exportStudentNumber, onSetExportStudentNumber)
+                            HorizontalDivider()
+                            SwitchSettingRow("原因或备注", settings.exportReason, onSetExportReason)
+                        }
+                    }
                 }
             }
         }
@@ -1408,6 +1477,11 @@ private fun RollCallItem(
     onEdit: () -> Unit,
 ) {
     val marked = mark != null
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val triggerDistance = remember(density) { with(density) { 72.dp.toPx() } }
+    val maximumDrag = remember(density) { with(density) { 112.dp.toPx() } }
+    var horizontalOffset by remember(student.id) { mutableFloatStateOf(0f) }
     val container = when (mark?.status) {
         AttendanceStatus.PRESENT -> MaterialTheme.colorScheme.primaryContainer
         AttendanceStatus.LATE -> Color(0xFFFFE0B2)
@@ -1415,32 +1489,50 @@ private fun RollCallItem(
         AttendanceStatus.ABSENT -> Color(0xFFFFDAD6)
         else -> MaterialTheme.colorScheme.surfaceContainerLow
     }
-    val swipeState = rememberSwipeToDismissBoxState(
-        confirmValueChange = { direction ->
-            when (direction) {
-                SwipeToDismissBoxValue.StartToEnd -> onSwipeRight()
-                SwipeToDismissBoxValue.EndToStart -> onSwipeLeft()
-                SwipeToDismissBoxValue.Settled -> Unit
+
+    fun resetHorizontalOffset() {
+        val start = horizontalOffset
+        scope.launch {
+            animate(initialValue = start, targetValue = 0f) { value, _ ->
+                horizontalOffset = value
             }
-            false
-        },
-    )
-    SwipeToDismissBox(
-        state = swipeState,
-        backgroundContent = {
-            val direction = swipeState.dismissDirection
-            Box(
-                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.secondaryContainer).padding(horizontal = 20.dp),
-                contentAlignment = if (direction == SwipeToDismissBoxValue.StartToEnd) Alignment.CenterStart else Alignment.CenterEnd,
-            ) {
-                Text(if (direction == SwipeToDismissBoxValue.StartToEnd) swipeRightLabel else swipeLeftLabel)
-            }
-        },
+        }
+    }
+
+    Box(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
     ) {
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(MaterialTheme.colorScheme.secondaryContainer)
+                .padding(horizontal = 20.dp),
+            contentAlignment = if (horizontalOffset >= 0f) Alignment.CenterStart else Alignment.CenterEnd,
+        ) {
+            Text(if (horizontalOffset >= 0f) swipeRightLabel else swipeLeftLabel)
+        }
         Card(
             modifier = Modifier
                 .fillMaxWidth()
+                .offset { IntOffset(horizontalOffset.roundToInt(), 0) }
                 .animateContentSize()
+                .pointerInput(student.id, swipeLeftLabel, swipeRightLabel) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { horizontalOffset = 0f },
+                        onDragCancel = { resetHorizontalOffset() },
+                        onDragEnd = {
+                            when {
+                                horizontalOffset >= triggerDistance -> onSwipeRight()
+                                horizontalOffset <= -triggerDistance -> onSwipeLeft()
+                            }
+                            resetHorizontalOffset()
+                        },
+                        onHorizontalDrag = { _, dragAmount ->
+                            horizontalOffset = (horizontalOffset + dragAmount)
+                                .coerceIn(-maximumDrag, maximumDrag)
+                        },
+                    )
+                }
                 .combinedClickable(onClick = onTogglePresent, onLongClick = onLongPress),
             colors = CardDefaults.cardColors(containerColor = container),
         ) {

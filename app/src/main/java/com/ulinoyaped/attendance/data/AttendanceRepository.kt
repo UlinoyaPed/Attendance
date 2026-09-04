@@ -109,6 +109,14 @@ class AttendanceRepository(context: Context) {
         )
     }
 
+    fun moveAbsenceReason(fromIndex: Int, toIndex: Int) {
+        val reasons = _settings.value.absenceReasons.toMutableList()
+        if (fromIndex !in reasons.indices || toIndex !in reasons.indices || fromIndex == toIndex) return
+        val reason = reasons.removeAt(fromIndex)
+        reasons.add(toIndex, reason)
+        updateSettings(_settings.value.copy(absenceReasons = reasons))
+    }
+
     fun setDefaultReason(reason: String) {
         if (reason.isEmpty() || reason in _settings.value.absenceReasons) {
             updateSettings(_settings.value.copy(defaultReason = reason))
