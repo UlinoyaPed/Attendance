@@ -107,6 +107,14 @@ class AttendanceRepository(context: Context) {
                 defaultReason = _settings.value.defaultReason.takeUnless { it == reason }.orEmpty(),
             ),
         )
+        _classes.value = _classes.value.map { group ->
+            group.copy(
+                attendanceSettings = group.attendanceSettings?.let { settings ->
+                    if (settings.defaultReason == reason) settings.copy(defaultReason = "") else settings
+                },
+            )
+        }
+        saveClasses()
     }
 
     fun moveAbsenceReason(fromIndex: Int, toIndex: Int) {
@@ -145,10 +153,33 @@ class AttendanceRepository(context: Context) {
             AttendanceStatus.LATE -> _settings.value.copy(lateIcon = icon)
             AttendanceStatus.LEAVE -> _settings.value.copy(leaveIcon = icon)
             AttendanceStatus.ABSENT -> _settings.value.copy(absentIcon = icon)
+            AttendanceStatus.EXEMPT -> _settings.value.copy(exemptIcon = icon)
             AttendanceStatus.UNMARKED -> return
         }
         updateSettings(updated)
     }
+
+    fun setStatusColor(status: AttendanceStatus, color: StatusColorOption) {
+        val updated = when (status) {
+            AttendanceStatus.PRESENT -> _settings.value.copy(presentColor = color)
+            AttendanceStatus.LATE -> _settings.value.copy(lateColor = color)
+            AttendanceStatus.LEAVE -> _settings.value.copy(leaveColor = color)
+            AttendanceStatus.ABSENT -> _settings.value.copy(absentColor = color)
+            AttendanceStatus.EXEMPT -> _settings.value.copy(exemptColor = color)
+            AttendanceStatus.UNMARKED -> return
+        }
+        updateSettings(updated)
+    }
+
+    fun setClassAttendanceSettings(classId: String, settings: ClassAttendanceSettings?) {
+        updateClass(classId) { it.copy(attendanceSettings = settings) }
+    }
+
+    fun setGroupResultsByStatus(enabled: Boolean) =
+        updateSettings(_settings.value.copy(groupResultsByStatus = enabled))
+
+    fun setHistoryTitleMode(mode: HistoryTitleMode) =
+        updateSettings(_settings.value.copy(historyTitleMode = mode))
 
     fun setExportHeader(enabled: Boolean) = updateSettings(_settings.value.copy(exportHeader = enabled))
 
@@ -185,7 +216,8 @@ class AttendanceRepository(context: Context) {
                 JSONObject()
                     .put("id", group.id)
                     .put("name", group.name)
-                    .put("students", students),
+                    .put("students", students)
+                    .put("attendanceSettings", group.attendanceSettings?.toJson() ?: JSONObject.NULL),
             )
         }
         preferences.edit().putString(KEY_CLASSES, array.toString()).apply()
@@ -230,6 +262,14 @@ class AttendanceRepository(context: Context) {
             .put("lateIcon", settings.lateIcon.name)
             .put("leaveIcon", settings.leaveIcon.name)
             .put("absentIcon", settings.absentIcon.name)
+            .put("exemptIcon", settings.exemptIcon.name)
+            .put("presentColor", settings.presentColor.name)
+            .put("lateColor", settings.lateColor.name)
+            .put("leaveColor", settings.leaveColor.name)
+            .put("absentColor", settings.absentColor.name)
+            .put("exemptColor", settings.exemptColor.name)
+            .put("groupResultsByStatus", settings.groupResultsByStatus)
+            .put("historyTitleMode", settings.historyTitleMode.name)
             .put("exportHeader", settings.exportHeader)
             .put("exportSummary", settings.exportSummary)
             .put("exportPresentStudents", settings.exportPresentStudents)
@@ -256,7 +296,14 @@ class AttendanceRepository(context: Context) {
                         )
                     }
                 }
-                add(ClassGroup(item.getString("id"), item.getString("name"), students))
+                add(
+                    ClassGroup(
+                        id = item.getString("id"),
+                        name = item.getString("name"),
+                        students = students,
+                        attendanceSettings = item.optJSONObject("attendanceSettings")?.toClassAttendanceSettings(),
+                    ),
+                )
             }
         }
     }.getOrDefault(emptyList())
@@ -320,6 +367,14 @@ class AttendanceRepository(context: Context) {
             lateIcon = enumValueOrDefault(json.optString("lateIcon"), defaults.lateIcon),
             leaveIcon = enumValueOrDefault(json.optString("leaveIcon"), defaults.leaveIcon),
             absentIcon = enumValueOrDefault(json.optString("absentIcon"), defaults.absentIcon),
+            exemptIcon = enumValueOrDefault(json.optString("exemptIcon"), defaults.exemptIcon),
+            presentColor = enumValueOrDefault(json.optString("presentColor"), defaults.presentColor),
+            lateColor = enumValueOrDefault(json.optString("lateColor"), defaults.lateColor),
+            leaveColor = enumValueOrDefault(json.optString("leaveColor"), defaults.leaveColor),
+            absentColor = enumValueOrDefault(json.optString("absentColor"), defaults.absentColor),
+            exemptColor = enumValueOrDefault(json.optString("exemptColor"), defaults.exemptColor),
+            groupResultsByStatus = json.optBoolean("groupResultsByStatus", defaults.groupResultsByStatus),
+            historyTitleMode = enumValueOrDefault(json.optString("historyTitleMode"), defaults.historyTitleMode),
             exportHeader = json.optBoolean("exportHeader", defaults.exportHeader),
             exportSummary = json.optBoolean("exportSummary", defaults.exportSummary),
             exportPresentStudents = json.optBoolean("exportPresentStudents", defaults.exportPresentStudents),
@@ -339,6 +394,26 @@ class AttendanceRepository(context: Context) {
 
 private inline fun <reified T : Enum<T>> enumValueOrDefault(value: String, default: T): T =
     runCatching { enumValueOf<T>(value) }.getOrDefault(default)
+
+private fun ClassAttendanceSettings.toJson(): JSONObject = JSONObject()
+    .put("defaultReason", defaultReason)
+    .put("defaultStatus", defaultStatus.name)
+    .put("longPressAction", longPressAction.name)
+    .put("swipeLeftAction", swipeLeftAction.name)
+    .put("swipeRightAction", swipeRightAction.name)
+    .put("groupResultsByStatus", groupResultsByStatus)
+
+private fun JSONObject.toClassAttendanceSettings(): ClassAttendanceSettings {
+    val defaults = ClassAttendanceSettings()
+    return defaults.copy(
+        defaultReason = optString("defaultReason"),
+        defaultStatus = enumValueOrDefault(optString("defaultStatus"), defaults.defaultStatus),
+        longPressAction = enumValueOrDefault(optString("longPressAction"), defaults.longPressAction),
+        swipeLeftAction = enumValueOrDefault(optString("swipeLeftAction"), defaults.swipeLeftAction),
+        swipeRightAction = enumValueOrDefault(optString("swipeRightAction"), defaults.swipeRightAction),
+        groupResultsByStatus = optBoolean("groupResultsByStatus", defaults.groupResultsByStatus),
+    )
+}
 
 fun parseStudentList(text: String): List<ImportedStudent> {
     val lines = text

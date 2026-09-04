@@ -13,11 +13,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -36,8 +38,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowDownward
-import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -48,8 +48,11 @@ import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Help
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
@@ -79,7 +82,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -113,19 +116,27 @@ import com.ulinoyaped.attendance.data.AttendanceSession
 import com.ulinoyaped.attendance.data.AttendanceStatus
 import com.ulinoyaped.attendance.data.AppSettings
 import com.ulinoyaped.attendance.data.ClassGroup
+import com.ulinoyaped.attendance.data.ClassAttendanceSettings
 import com.ulinoyaped.attendance.data.GestureAction
+import com.ulinoyaped.attendance.data.HistoryTitleMode
+import com.ulinoyaped.attendance.data.StatusColorOption
 import com.ulinoyaped.attendance.data.StatusIconOption
 import com.ulinoyaped.attendance.data.Student
 import com.ulinoyaped.attendance.data.iconFor
+import com.ulinoyaped.attendance.data.colorFor
+import com.ulinoyaped.attendance.data.forClass
+import com.ulinoyaped.attendance.data.toClassSettings
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+import kotlin.math.abs
 
 private sealed interface Screen {
     data class Root(val tab: RootTab) : Screen
     data class ClassDetail(val classId: String) : Screen
+    data class ClassSettings(val classId: String) : Screen
     data class RollCall(val classId: String, val backToClassDetail: Boolean = false) : Screen
     data class Result(
         val classId: String,
@@ -161,13 +172,29 @@ private enum class SettingSelector {
     ICON_LATE,
     ICON_LEAVE,
     ICON_ABSENT,
+    ICON_EXEMPT,
+    COLOR_PRESENT,
+    COLOR_LATE,
+    COLOR_LEAVE,
+    COLOR_ABSENT,
+    COLOR_EXEMPT,
+    HISTORY_TITLE,
 }
 
 private enum class SettingsTab(val label: String) {
     OPERATIONS("操作"),
     REASONS("原因"),
-    ICONS("图标"),
+    ICONS("外观"),
     EXPORT("导出"),
+    HISTORY("历史"),
+}
+
+private enum class ClassSettingSelector {
+    DEFAULT_STATUS,
+    DEFAULT_REASON,
+    LONG_PRESS,
+    SWIPE_LEFT,
+    SWIPE_RIGHT,
 }
 
 @Composable
@@ -183,6 +210,7 @@ fun AttendanceApp() {
         screen = when (val current = screen) {
             is Screen.Root -> Screen.Root(RootTab.CLASSES)
             is Screen.ClassDetail -> Screen.Root(RootTab.CLASSES)
+            is Screen.ClassSettings -> Screen.ClassDetail(current.classId)
             is Screen.RollCall -> if (current.backToClassDetail) {
                 Screen.ClassDetail(current.classId)
             } else {
@@ -220,6 +248,9 @@ fun AttendanceApp() {
             onSetSwipeLeftAction = repository::setSwipeLeftAction,
             onSetSwipeRightAction = repository::setSwipeRightAction,
             onSetStatusIcon = repository::setStatusIcon,
+            onSetStatusColor = repository::setStatusColor,
+            onSetGroupResultsByStatus = repository::setGroupResultsByStatus,
+            onSetHistoryTitleMode = repository::setHistoryTitleMode,
             onSetExportHeader = repository::setExportHeader,
             onSetExportSummary = repository::setExportSummary,
             onSetExportPresentStudents = repository::setExportPresentStudents,
@@ -242,6 +273,24 @@ fun AttendanceApp() {
                     onStart = { screen = Screen.RollCall(group.id, backToClassDetail = true) },
                     onOpenResult = { screen = Screen.Result(group.id, it) },
                     onDeleteSession = repository::deleteSession,
+                    onOpenSettings = { screen = Screen.ClassSettings(group.id) },
+                )
+            }
+        }
+
+        is Screen.ClassSettings -> {
+            val group = classes.firstOrNull { it.id == current.classId }
+            if (group == null) {
+                screen = Screen.Root(RootTab.CLASSES)
+            } else {
+                ClassSettingsScreen(
+                    group = group,
+                    globalSettings = settings,
+                    onBack = { screen = Screen.ClassDetail(group.id) },
+                    onSave = {
+                        repository.setClassAttendanceSettings(group.id, it)
+                        screen = Screen.ClassDetail(group.id)
+                    },
                 )
             }
         }
@@ -319,6 +368,9 @@ private fun RootScreen(
     onSetSwipeLeftAction: (GestureAction) -> Unit,
     onSetSwipeRightAction: (GestureAction) -> Unit,
     onSetStatusIcon: (AttendanceStatus, StatusIconOption) -> Unit,
+    onSetStatusColor: (AttendanceStatus, StatusColorOption) -> Unit,
+    onSetGroupResultsByStatus: (Boolean) -> Unit,
+    onSetHistoryTitleMode: (HistoryTitleMode) -> Unit,
     onSetExportHeader: (Boolean) -> Unit,
     onSetExportSummary: (Boolean) -> Unit,
     onSetExportPresentStudents: (Boolean) -> Unit,
@@ -342,6 +394,7 @@ private fun RootScreen(
             sessions = sessions,
             onOpenResult = onOpenResult,
             onDeleteSession = onDeleteSession,
+            titleMode = settings.historyTitleMode,
             bottomBar = bottomBar,
         )
         RootTab.SETTINGS -> SettingsScreen(
@@ -355,6 +408,9 @@ private fun RootScreen(
             onSetSwipeLeftAction = onSetSwipeLeftAction,
             onSetSwipeRightAction = onSetSwipeRightAction,
             onSetStatusIcon = onSetStatusIcon,
+            onSetStatusColor = onSetStatusColor,
+            onSetGroupResultsByStatus = onSetGroupResultsByStatus,
+            onSetHistoryTitleMode = onSetHistoryTitleMode,
             onSetExportHeader = onSetExportHeader,
             onSetExportSummary = onSetExportSummary,
             onSetExportPresentStudents = onSetExportPresentStudents,
@@ -582,6 +638,7 @@ private fun ClassDetailScreen(
     onStart: () -> Unit,
     onOpenResult: (String) -> Unit,
     onDeleteSession: (String) -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -609,7 +666,13 @@ private fun ClassDetailScreen(
     }
 
     Scaffold(
-        topBar = { SimpleBackBar(group.name, onBack) },
+        topBar = {
+            SimpleBackBar(group.name, onBack) {
+                IconButton(onClick = onOpenSettings) {
+                    Icon(Icons.Default.Settings, contentDescription = "班级设置")
+                }
+            }
+        },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
         LazyColumn(
@@ -759,6 +822,7 @@ private fun RollCallScreen(
     onBack: () -> Unit,
     onFinish: (List<AttendanceEntry>) -> Unit,
 ) {
+    val effectiveSettings = settings.forClass(group)
     val marks = remember(group.id) { mutableStateMapOf<String, Mark>() }
     var editingStudent by remember { mutableStateOf<Student?>(null) }
     var showFinishDialog by remember { mutableStateOf(false) }
@@ -768,16 +832,17 @@ private fun RollCallScreen(
         when (action) {
             GestureAction.EDIT -> editingStudent = student
             GestureAction.PRESENT -> marks[student.id] = Mark(AttendanceStatus.PRESENT)
-            GestureAction.LATE -> marks[student.id] = Mark(AttendanceStatus.LATE, settings.defaultReason)
-            GestureAction.LEAVE -> marks[student.id] = Mark(AttendanceStatus.LEAVE, settings.defaultReason)
-            GestureAction.ABSENT -> marks[student.id] = Mark(AttendanceStatus.ABSENT, settings.defaultReason)
+            GestureAction.LATE -> marks[student.id] = Mark(AttendanceStatus.LATE, effectiveSettings.defaultReason)
+            GestureAction.LEAVE -> marks[student.id] = Mark(AttendanceStatus.LEAVE, effectiveSettings.defaultReason)
+            GestureAction.ABSENT -> marks[student.id] = Mark(AttendanceStatus.ABSENT, effectiveSettings.defaultReason)
+            GestureAction.EXEMPT -> marks[student.id] = Mark(AttendanceStatus.EXEMPT)
             GestureAction.CLEAR -> marks.remove(student.id)
         }
     }
 
     fun finish() {
         val entries = group.students.map { student ->
-            val mark = marks[student.id] ?: Mark(AttendanceStatus.ABSENT, settings.defaultReason)
+            val mark = marks[student.id] ?: Mark(AttendanceStatus.ABSENT, effectiveSettings.defaultReason)
             AttendanceEntry(
                 studentId = student.id,
                 studentName = student.name,
@@ -814,7 +879,7 @@ private fun RollCallScreen(
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(
-                        "点按：${settings.defaultStatus.label} · 长按：${settings.longPressAction.label} · 左滑：${settings.swipeLeftAction.label} · 右滑：${settings.swipeRightAction.label}",
+                        "点按：${effectiveSettings.defaultStatus.label} · 长按：${effectiveSettings.longPressAction.label} · 左滑：${effectiveSettings.swipeLeftAction.label} · 右滑：${effectiveSettings.swipeRightAction.label}",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
                     )
@@ -825,22 +890,23 @@ private fun RollCallScreen(
                 RollCallItem(
                     student = student,
                     mark = mark,
-                    iconOption = mark?.status?.let { settings.iconFor(it) },
+                    iconOption = mark?.status?.let { effectiveSettings.iconFor(it) },
+                    colorOption = mark?.status?.let { effectiveSettings.colorFor(it) },
                     onTogglePresent = {
-                        if (mark?.status == settings.defaultStatus) {
+                        if (mark?.status == effectiveSettings.defaultStatus) {
                             marks.remove(student.id)
                         } else {
                             marks[student.id] = Mark(
-                                settings.defaultStatus,
-                                settings.defaultReason.takeIf { settings.defaultStatus != AttendanceStatus.PRESENT }.orEmpty(),
+                                effectiveSettings.defaultStatus,
+                                effectiveSettings.defaultReason.takeIf { statusUsesReason(effectiveSettings.defaultStatus) }.orEmpty(),
                             )
                         }
                     },
-                    onLongPress = { applyAction(student, settings.longPressAction) },
-                    onSwipeLeft = { applyAction(student, settings.swipeLeftAction) },
-                    onSwipeRight = { applyAction(student, settings.swipeRightAction) },
-                    swipeLeftLabel = settings.swipeLeftAction.label,
-                    swipeRightLabel = settings.swipeRightAction.label,
+                    onLongPress = { applyAction(student, effectiveSettings.longPressAction) },
+                    onSwipeLeft = { applyAction(student, effectiveSettings.swipeLeftAction) },
+                    onSwipeRight = { applyAction(student, effectiveSettings.swipeRightAction) },
+                    swipeLeftLabel = effectiveSettings.swipeLeftAction.label,
+                    swipeRightLabel = effectiveSettings.swipeRightAction.label,
                     onEdit = { editingStudent = student },
                 )
             }
@@ -851,11 +917,11 @@ private fun RollCallScreen(
         StatusDialog(
             student = student,
             initial = marks[student.id] ?: Mark(
-                settings.defaultStatus,
-                settings.defaultReason.takeIf { settings.defaultStatus != AttendanceStatus.PRESENT }.orEmpty(),
+                effectiveSettings.defaultStatus,
+                effectiveSettings.defaultReason.takeIf { statusUsesReason(effectiveSettings.defaultStatus) }.orEmpty(),
             ),
-            presetReasons = settings.absenceReasons,
-            defaultReason = settings.defaultReason,
+            presetReasons = effectiveSettings.absenceReasons,
+            defaultReason = effectiveSettings.defaultReason,
             onDismiss = { editingStudent = null },
             onConfirm = { mark ->
                 marks[student.id] = mark
@@ -888,11 +954,14 @@ private fun ResultScreen(
     settings: AppSettings,
     onBack: () -> Unit,
 ) {
+    val effectiveSettings = settings.forClass(group)
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var showExportDialog by remember { mutableStateOf(false) }
-    val exportText = remember(group, session, settings) { buildAttendanceExport(group, session, settings) }
+    val exportText = remember(group, session, effectiveSettings) {
+        buildAttendanceExport(group, session, effectiveSettings)
+    }
     val saveLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/plain"),
     ) { uri ->
@@ -907,7 +976,13 @@ private fun ResultScreen(
     val counts = AttendanceStatus.entries.associateWith { status ->
         session.entries.count { it.status == status }
     }
-    val exceptional = session.entries.filter { it.status != AttendanceStatus.PRESENT }
+    val resultStatuses = listOf(
+        AttendanceStatus.PRESENT,
+        AttendanceStatus.LATE,
+        AttendanceStatus.LEAVE,
+        AttendanceStatus.ABSENT,
+        AttendanceStatus.EXEMPT,
+    )
 
     Scaffold(
         topBar = {
@@ -941,27 +1016,38 @@ private fun ResultScreen(
                 )
             }
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
+                LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(end = 4.dp),
                 ) {
-                    SummaryCard("到", counts.getValue(AttendanceStatus.PRESENT), settings.presentIcon, Modifier.weight(1f))
-                    SummaryCard("迟到", counts.getValue(AttendanceStatus.LATE), settings.lateIcon, Modifier.weight(1f))
-                    SummaryCard("请假", counts.getValue(AttendanceStatus.LEAVE), settings.leaveIcon, Modifier.weight(1f))
-                    SummaryCard("缺勤", counts.getValue(AttendanceStatus.ABSENT), settings.absentIcon, Modifier.weight(1f))
+                    items(resultStatuses) { status ->
+                        SummaryCard(
+                            label = status.label,
+                            count = counts.getValue(status),
+                            iconOption = effectiveSettings.iconFor(status),
+                            colorOption = effectiveSettings.colorFor(status),
+                            modifier = Modifier.width(84.dp),
+                        )
+                    }
                 }
             }
-            item { SectionTitle("异常情况") }
-            if (exceptional.isEmpty()) {
-                item { HintCard("全员到齐") }
+            if (effectiveSettings.groupResultsByStatus) {
+                resultStatuses.forEach { status ->
+                    val entries = session.entries.filter { it.status == status }
+                    if (entries.isNotEmpty()) {
+                        item(key = "section-${status.name}") {
+                            SectionTitle("${status.label} · ${entries.size}")
+                        }
+                        items(entries, key = { "${status.name}-${it.studentId}" }) { entry ->
+                            ResultEntryItem(entry, effectiveSettings)
+                        }
+                    }
+                }
             } else {
-                items(exceptional, key = { it.studentId }) { entry ->
-                    ResultEntryItem(entry, settings.iconFor(entry.status))
+                item { SectionTitle("人员明细 · ${session.entries.size}") }
+                items(session.entries, key = { it.studentId }) { entry ->
+                    CompactResultItem(entry, effectiveSettings)
                 }
-            }
-            item { SectionTitle("全部学生 · ${session.entries.size}") }
-            items(session.entries, key = { "all-${it.studentId}" }) { entry ->
-                CompactResultItem(entry, settings.iconFor(entry.status))
             }
         }
     }
@@ -1019,6 +1105,7 @@ private fun HistoryScreen(
     sessions: List<AttendanceSession>,
     onOpenResult: (String, String) -> Unit,
     onDeleteSession: (String) -> Unit,
+    titleMode: HistoryTitleMode,
     bottomBar: @Composable () -> Unit,
 ) {
     val classNames = classes.associate { it.id to it.name }
@@ -1043,6 +1130,7 @@ private fun HistoryScreen(
                     GlobalHistoryItem(
                         className = classNames[session.classId].orEmpty(),
                         session = session,
+                        titleMode = titleMode,
                         onClick = { onOpenResult(session.classId, session.id) },
                         onDelete = { sessionToDelete = session },
                     )
@@ -1075,6 +1163,9 @@ private fun SettingsScreen(
     onSetSwipeLeftAction: (GestureAction) -> Unit,
     onSetSwipeRightAction: (GestureAction) -> Unit,
     onSetStatusIcon: (AttendanceStatus, StatusIconOption) -> Unit,
+    onSetStatusColor: (AttendanceStatus, StatusColorOption) -> Unit,
+    onSetGroupResultsByStatus: (Boolean) -> Unit,
+    onSetHistoryTitleMode: (HistoryTitleMode) -> Unit,
     onSetExportHeader: (Boolean) -> Unit,
     onSetExportSummary: (Boolean) -> Unit,
     onSetExportPresentStudents: (Boolean) -> Unit,
@@ -1089,7 +1180,11 @@ private fun SettingsScreen(
         topBar = {
             Column {
                 RootLargeTopBar("设置")
-                TabRow(selectedTabIndex = selectedTab.ordinal) {
+                ScrollableTabRow(
+                    selectedTabIndex = selectedTab.ordinal,
+                    edgePadding = 12.dp,
+                    divider = {},
+                ) {
                     SettingsTab.entries.forEach { tab ->
                         Tab(
                             selected = selectedTab == tab,
@@ -1172,6 +1267,8 @@ private fun SettingsScreen(
                         item { HintCard("暂未设置常用原因。点名时仍可手动输入原因。") }
                     } else {
                         itemsIndexed(settings.absenceReasons, key = { _, reason -> reason }) { index, reason ->
+                            val density = LocalDensity.current
+                            var accumulatedDrag by remember(reason) { mutableFloatStateOf(0f) }
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = CardDefaults.cardColors(
@@ -1182,19 +1279,34 @@ private fun SettingsScreen(
                                     modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
+                                    Icon(
+                                        Icons.Default.DragHandle,
+                                        contentDescription = "拖动排序",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier
+                                            .size(42.dp)
+                                            .padding(9.dp)
+                                            .pointerInput(reason, index) {
+                                                detectDragGesturesAfterLongPress(
+                                                    onDragStart = { accumulatedDrag = 0f },
+                                                    onDragEnd = { accumulatedDrag = 0f },
+                                                    onDragCancel = { accumulatedDrag = 0f },
+                                                    onDrag = { change, dragAmount ->
+                                                        change.consume()
+                                                        accumulatedDrag += dragAmount.y
+                                                        val threshold = with(density) { 42.dp.toPx() }
+                                                        if (abs(accumulatedDrag) >= threshold) {
+                                                            val target = if (accumulatedDrag > 0) index + 1 else index - 1
+                                                            if (target in settings.absenceReasons.indices) {
+                                                                onMoveReason(index, target)
+                                                            }
+                                                            accumulatedDrag = 0f
+                                                        }
+                                                    },
+                                                )
+                                            },
+                                    )
                                     Text(reason, modifier = Modifier.weight(1f))
-                                    IconButton(
-                                        enabled = index > 0,
-                                        onClick = { onMoveReason(index, index - 1) },
-                                    ) {
-                                        Icon(Icons.Default.ArrowUpward, contentDescription = "上移")
-                                    }
-                                    IconButton(
-                                        enabled = index < settings.absenceReasons.lastIndex,
-                                        onClick = { onMoveReason(index, index + 1) },
-                                    ) {
-                                        Icon(Icons.Default.ArrowDownward, contentDescription = "下移")
-                                    }
                                     IconButton(onClick = { onRemoveReason(reason) }) {
                                         Icon(Icons.Default.Delete, contentDescription = "删除")
                                     }
@@ -1205,21 +1317,53 @@ private fun SettingsScreen(
                 }
 
                 SettingsTab.ICONS -> {
-                    item { SectionTitle("状态图标") }
+                    item { SectionTitle("状态外观") }
                     item {
                         SettingsGroup {
-                            IconSettingRow("到场", settings.presentIcon) { selector = SettingSelector.ICON_PRESENT }
+                            StatusAppearanceRow(
+                                "到场", settings.presentIcon, settings.presentColor,
+                                { selector = SettingSelector.ICON_PRESENT },
+                                { selector = SettingSelector.COLOR_PRESENT },
+                            )
                             HorizontalDivider()
-                            IconSettingRow("迟到", settings.lateIcon) { selector = SettingSelector.ICON_LATE }
+                            StatusAppearanceRow(
+                                "迟到", settings.lateIcon, settings.lateColor,
+                                { selector = SettingSelector.ICON_LATE },
+                                { selector = SettingSelector.COLOR_LATE },
+                            )
                             HorizontalDivider()
-                            IconSettingRow("请假", settings.leaveIcon) { selector = SettingSelector.ICON_LEAVE }
+                            StatusAppearanceRow(
+                                "请假", settings.leaveIcon, settings.leaveColor,
+                                { selector = SettingSelector.ICON_LEAVE },
+                                { selector = SettingSelector.COLOR_LEAVE },
+                            )
                             HorizontalDivider()
-                            IconSettingRow("缺勤", settings.absentIcon) { selector = SettingSelector.ICON_ABSENT }
+                            StatusAppearanceRow(
+                                "缺勤", settings.absentIcon, settings.absentColor,
+                                { selector = SettingSelector.ICON_ABSENT },
+                                { selector = SettingSelector.COLOR_ABSENT },
+                            )
+                            HorizontalDivider()
+                            StatusAppearanceRow(
+                                "不参与", settings.exemptIcon, settings.exemptColor,
+                                { selector = SettingSelector.ICON_EXEMPT },
+                                { selector = SettingSelector.COLOR_EXEMPT },
+                            )
                         }
                     }
                 }
 
                 SettingsTab.EXPORT -> {
+                    item { SectionTitle("结果排列") }
+                    item {
+                        SettingsGroup {
+                            SwitchSettingRow(
+                                "按状态分类排列",
+                                settings.groupResultsByStatus,
+                                onSetGroupResultsByStatus,
+                            )
+                        }
+                    }
                     item { SectionTitle("文本导出内容") }
                     item {
                         SettingsGroup {
@@ -1233,6 +1377,27 @@ private fun SettingsScreen(
                             HorizontalDivider()
                             SwitchSettingRow("原因或备注", settings.exportReason, onSetExportReason)
                         }
+                    }
+                }
+
+                SettingsTab.HISTORY -> {
+                    item { SectionTitle("历史记录") }
+                    item {
+                        SettingsGroup {
+                            SettingRow(
+                                title = "记录标题",
+                                value = settings.historyTitleMode.label,
+                                onClick = { selector = SettingSelector.HISTORY_TITLE },
+                            )
+                        }
+                    }
+                    item {
+                        Text(
+                            "选择历史列表优先显示班级名称或点名时间。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 4.dp),
+                        )
                     }
                 }
             }
@@ -1308,6 +1473,141 @@ private fun SettingsScreen(
                 onDismiss = { selector = null },
                 onSelect = { onSetStatusIcon(AttendanceStatus.ABSENT, it); selector = null },
             )
+            SettingSelector.ICON_EXEMPT -> IconChoiceDialog(
+                title = "不参与图标",
+                selected = settings.exemptIcon,
+                onDismiss = { selector = null },
+                onSelect = { onSetStatusIcon(AttendanceStatus.EXEMPT, it); selector = null },
+            )
+            SettingSelector.COLOR_PRESENT -> ColorChoiceDialog(
+                "到场颜色", settings.presentColor, { selector = null },
+            ) { onSetStatusColor(AttendanceStatus.PRESENT, it); selector = null }
+            SettingSelector.COLOR_LATE -> ColorChoiceDialog(
+                "迟到颜色", settings.lateColor, { selector = null },
+            ) { onSetStatusColor(AttendanceStatus.LATE, it); selector = null }
+            SettingSelector.COLOR_LEAVE -> ColorChoiceDialog(
+                "请假颜色", settings.leaveColor, { selector = null },
+            ) { onSetStatusColor(AttendanceStatus.LEAVE, it); selector = null }
+            SettingSelector.COLOR_ABSENT -> ColorChoiceDialog(
+                "缺勤颜色", settings.absentColor, { selector = null },
+            ) { onSetStatusColor(AttendanceStatus.ABSENT, it); selector = null }
+            SettingSelector.COLOR_EXEMPT -> ColorChoiceDialog(
+                "不参与颜色", settings.exemptColor, { selector = null },
+            ) { onSetStatusColor(AttendanceStatus.EXEMPT, it); selector = null }
+            SettingSelector.HISTORY_TITLE -> HistoryTitleChoiceDialog(
+                selected = settings.historyTitleMode,
+                onDismiss = { selector = null },
+                onSelect = { onSetHistoryTitleMode(it); selector = null },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ClassSettingsScreen(
+    group: ClassGroup,
+    globalSettings: AppSettings,
+    onBack: () -> Unit,
+    onSave: (ClassAttendanceSettings?) -> Unit,
+) {
+    var customEnabled by remember(group.id, group.attendanceSettings) {
+        mutableStateOf(group.attendanceSettings != null)
+    }
+    var draft by remember(group.id, group.attendanceSettings, globalSettings) {
+        mutableStateOf(group.attendanceSettings ?: globalSettings.toClassSettings())
+    }
+    var selector by remember { mutableStateOf<ClassSettingSelector?>(null) }
+
+    Scaffold(
+        topBar = {
+            SimpleBackBar("${group.name} · 设置", onBack) {
+                TextButton(onClick = { onSave(draft.takeIf { customEnabled }) }) {
+                    Text("保存")
+                }
+            }
+        },
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 32.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item { SectionTitle("班级专属设置") }
+            item {
+                SettingsGroup {
+                    SwitchSettingRow("覆盖全局点名设置", customEnabled) { enabled ->
+                        customEnabled = enabled
+                        if (enabled && group.attendanceSettings == null) {
+                            draft = globalSettings.toClassSettings()
+                        }
+                    }
+                }
+            }
+            if (customEnabled) {
+                item { SectionTitle("点名操作") }
+                item {
+                    SettingsGroup {
+                        SettingRow("点按默认选择", draft.defaultStatus.label) {
+                            selector = ClassSettingSelector.DEFAULT_STATUS
+                        }
+                        HorizontalDivider()
+                        SettingRow("默认未到原因", draft.defaultReason.ifBlank { "不预填" }) {
+                            selector = ClassSettingSelector.DEFAULT_REASON
+                        }
+                        HorizontalDivider()
+                        SettingRow("长按姓名", draft.longPressAction.label) {
+                            selector = ClassSettingSelector.LONG_PRESS
+                        }
+                        HorizontalDivider()
+                        SettingRow("向左滑动", draft.swipeLeftAction.label) {
+                            selector = ClassSettingSelector.SWIPE_LEFT
+                        }
+                        HorizontalDivider()
+                        SettingRow("向右滑动", draft.swipeRightAction.label) {
+                            selector = ClassSettingSelector.SWIPE_RIGHT
+                        }
+                    }
+                }
+                item { SectionTitle("结果排列") }
+                item {
+                    SettingsGroup {
+                        SwitchSettingRow(
+                            "按状态分类排列",
+                            draft.groupResultsByStatus,
+                        ) { draft = draft.copy(groupResultsByStatus = it) }
+                    }
+                }
+            } else {
+                item { HintCard("当前跟随全局设置。启用后，这个班级可以单独指定点按、手势、默认原因和结果排列。") }
+            }
+            item {
+                Text(
+                    "未到原因列表、状态图标、颜色、导出内容和历史标题继续使用全局设置。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+                )
+            }
+        }
+    }
+
+    selector?.let { selected ->
+        when (selected) {
+            ClassSettingSelector.DEFAULT_STATUS -> StatusChoiceDialog(
+                "点按默认选择", draft.defaultStatus, { selector = null },
+            ) { draft = draft.copy(defaultStatus = it); selector = null }
+            ClassSettingSelector.DEFAULT_REASON -> ReasonChoiceDialog(
+                globalSettings.absenceReasons, draft.defaultReason, { selector = null },
+            ) { draft = draft.copy(defaultReason = it); selector = null }
+            ClassSettingSelector.LONG_PRESS -> GestureChoiceDialog(
+                "长按姓名", draft.longPressAction, { selector = null },
+            ) { draft = draft.copy(longPressAction = it); selector = null }
+            ClassSettingSelector.SWIPE_LEFT -> GestureChoiceDialog(
+                "向左滑动", draft.swipeLeftAction, { selector = null },
+            ) { draft = draft.copy(swipeLeftAction = it); selector = null }
+            ClassSettingSelector.SWIPE_RIGHT -> GestureChoiceDialog(
+                "向右滑动", draft.swipeRightAction, { selector = null },
+            ) { draft = draft.copy(swipeRightAction = it); selector = null }
         }
     }
 }
@@ -1336,14 +1636,31 @@ private fun SettingRow(title: String, value: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun IconSettingRow(title: String, option: StatusIconOption, onClick: () -> Unit) {
+private fun StatusAppearanceRow(
+    title: String,
+    iconOption: StatusIconOption,
+    colorOption: StatusColorOption,
+    onIconClick: () -> Unit,
+    onColorClick: () -> Unit,
+) {
+    val color = statusColor(colorOption)
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(16.dp, 13.dp),
+        modifier = Modifier.fillMaxWidth().padding(14.dp, 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-        Icon(statusImageVector(option), contentDescription = option.label, modifier = Modifier.size(20.dp))
-        Text(" ${option.label}  ›", color = MaterialTheme.colorScheme.primary)
+        Surface(color = color.copy(alpha = 0.16f), shape = CircleShape) {
+            Icon(
+                statusImageVector(iconOption),
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.padding(9.dp).size(18.dp),
+            )
+        }
+        Text(title, modifier = Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.bodyLarge)
+        TextButton(onClick = onIconClick) { Text(iconOption.label) }
+        IconButton(onClick = onColorClick) {
+            Icon(Icons.Default.Palette, contentDescription = "${title}颜色", tint = color)
+        }
     }
 }
 
@@ -1430,6 +1747,59 @@ private fun IconChoiceDialog(
 }
 
 @Composable
+private fun ColorChoiceDialog(
+    title: String,
+    selected: StatusColorOption,
+    onDismiss: () -> Unit,
+    onSelect: (StatusColorOption) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                StatusColorOption.entries.forEach { option ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable { onSelect(option) }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = option == selected, onClick = { onSelect(option) })
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(CircleShape)
+                                .background(statusColor(option)),
+                        )
+                        Text(option.label, modifier = Modifier.padding(start = 10.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun HistoryTitleChoiceDialog(
+    selected: HistoryTitleMode,
+    onDismiss: () -> Unit,
+    onSelect: (HistoryTitleMode) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("历史记录标题") },
+        text = {
+            Column {
+                HistoryTitleMode.entries.forEach { option ->
+                    ChoiceRow(option.label, option == selected) { onSelect(option) }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
 private fun GestureChoiceDialog(
     title: String,
     selected: GestureAction,
@@ -1467,6 +1837,7 @@ private fun RollCallItem(
     student: Student,
     mark: Mark?,
     iconOption: StatusIconOption?,
+    colorOption: StatusColorOption?,
     onTogglePresent: () -> Unit,
     onLongPress: () -> Unit,
     onSwipeLeft: () -> Unit,
@@ -1481,13 +1852,8 @@ private fun RollCallItem(
     val triggerDistance = remember(density) { with(density) { 72.dp.toPx() } }
     val maximumDrag = remember(density) { with(density) { 112.dp.toPx() } }
     var horizontalOffset by remember(student.id) { mutableFloatStateOf(0f) }
-    val container = when (mark?.status) {
-        AttendanceStatus.PRESENT -> MaterialTheme.colorScheme.primaryContainer
-        AttendanceStatus.LATE -> Color(0xFFFFE0B2)
-        AttendanceStatus.LEAVE -> Color(0xFFE1E2EC)
-        AttendanceStatus.ABSENT -> Color(0xFFFFDAD6)
-        else -> MaterialTheme.colorScheme.surfaceContainerLow
-    }
+    val markColor = colorOption?.let { statusColor(it) }
+    val container = markColor?.copy(alpha = 0.16f) ?: MaterialTheme.colorScheme.surfaceContainerLow
 
     fun resetHorizontalOffset() {
         val start = horizontalOffset
@@ -1544,7 +1910,7 @@ private fun RollCallItem(
                         .size(34.dp)
                         .clip(CircleShape)
                         .background(
-                            if (marked) MaterialTheme.colorScheme.primary
+                            if (marked) markColor ?: MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.surfaceVariant,
                         ),
                     contentAlignment = Alignment.Center,
@@ -1552,8 +1918,8 @@ private fun RollCallItem(
                     Icon(
                         imageVector = iconOption?.let(::statusImageVector) ?: Icons.Default.Person,
                         contentDescription = mark?.status?.label ?: "未点",
-                        tint = if (marked) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp),
+                        tint = if (marked) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
                     )
                 }
                 Spacer(Modifier.width(12.dp))
@@ -1638,11 +2004,16 @@ private fun HistoryItem(session: AttendanceSession, onClick: () -> Unit, onDelet
 private fun GlobalHistoryItem(
     className: String,
     session: AttendanceSession,
+    titleMode: HistoryTitleMode,
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val present = session.entries.count { it.status == AttendanceStatus.PRESENT }
     val absent = session.entries.count { it.status == AttendanceStatus.ABSENT }
+    val exempt = session.entries.count { it.status == AttendanceStatus.EXEMPT }
+    val resolvedClassName = className.ifBlank { "已删除的班级" }
+    val headline = if (titleMode == HistoryTitleMode.CLASS_NAME) resolvedClassName else formatTime(session.createdAt)
+    val detailPrefix = if (titleMode == HistoryTitleMode.CLASS_NAME) formatTime(session.createdAt) else resolvedClassName
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
@@ -1653,9 +2024,9 @@ private fun GlobalHistoryItem(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(className.ifBlank { "已删除的班级" }, style = MaterialTheme.typography.titleMedium)
+                Text(headline, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "${formatTime(session.createdAt)} · 到 $present · 缺勤 $absent",
+                    "$detailPrefix · 到 $present · 缺勤 $absent · 不参与 $exempt",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1688,7 +2059,7 @@ private fun DeleteHistoryDialog(
 }
 
 @Composable
-private fun ResultEntryItem(entry: AttendanceEntry, iconOption: StatusIconOption) {
+private fun ResultEntryItem(entry: AttendanceEntry, settings: AppSettings) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
@@ -1710,13 +2081,13 @@ private fun ResultEntryItem(entry: AttendanceEntry, iconOption: StatusIconOption
                     Text("原因：${entry.reason}", modifier = Modifier.padding(top = 5.dp))
                 }
             }
-            StatusBadge(entry.status, iconOption)
+            StatusBadge(entry.status, settings.iconFor(entry.status), settings.colorFor(entry.status))
         }
     }
 }
 
 @Composable
-private fun CompactResultItem(entry: AttendanceEntry, iconOption: StatusIconOption) {
+private fun CompactResultItem(entry: AttendanceEntry, settings: AppSettings) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1730,26 +2101,29 @@ private fun CompactResultItem(entry: AttendanceEntry, iconOption: StatusIconOpti
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        StatusBadge(entry.status, iconOption)
+        StatusBadge(entry.status, settings.iconFor(entry.status), settings.colorFor(entry.status))
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 @Composable
-private fun StatusBadge(status: AttendanceStatus, iconOption: StatusIconOption) {
-    val color = when (status) {
-        AttendanceStatus.PRESENT -> MaterialTheme.colorScheme.primaryContainer
-        AttendanceStatus.LATE -> Color(0xFFFFE0B2)
-        AttendanceStatus.LEAVE -> MaterialTheme.colorScheme.secondaryContainer
-        AttendanceStatus.ABSENT -> Color(0xFFFFDAD6)
-        AttendanceStatus.UNMARKED -> MaterialTheme.colorScheme.surfaceVariant
-    }
-    Surface(color = color, shape = RoundedCornerShape(50)) {
+private fun StatusBadge(
+    status: AttendanceStatus,
+    iconOption: StatusIconOption,
+    colorOption: StatusColorOption,
+) {
+    val color = statusColor(colorOption)
+    Surface(color = color.copy(alpha = 0.16f), shape = RoundedCornerShape(50)) {
         Row(
             modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(statusImageVector(iconOption), contentDescription = null, modifier = Modifier.size(16.dp))
+            Icon(
+                statusImageVector(iconOption),
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(15.dp),
+            )
             Text(status.label, modifier = Modifier.padding(start = 4.dp))
         }
     }
@@ -1760,14 +2134,21 @@ private fun SummaryCard(
     label: String,
     count: Int,
     iconOption: StatusIconOption,
+    colorOption: StatusColorOption,
     modifier: Modifier = Modifier,
 ) {
+    val color = statusColor(colorOption)
     Card(modifier = modifier) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Icon(statusImageVector(iconOption), contentDescription = null, modifier = Modifier.size(20.dp))
+            Icon(
+                statusImageVector(iconOption),
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(18.dp),
+            )
             Text(count.toString(), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Text(label, style = MaterialTheme.typography.labelMedium)
         }
@@ -1795,11 +2176,12 @@ private fun StatusDialog(
                     AttendanceStatus.LATE,
                     AttendanceStatus.LEAVE,
                     AttendanceStatus.ABSENT,
+                    AttendanceStatus.EXEMPT,
                 ).forEach { option ->
                     Row(
                         modifier = Modifier.fillMaxWidth().clickable {
                             status = option
-                            if (option == AttendanceStatus.PRESENT) reason = ""
+                            if (!statusUsesReason(option)) reason = ""
                             else if (reason.isBlank()) reason = defaultReason
                         }.padding(vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1808,21 +2190,23 @@ private fun StatusDialog(
                             selected = status == option,
                             onClick = {
                                 status = option
-                                if (option == AttendanceStatus.PRESENT) reason = ""
+                                if (!statusUsesReason(option)) reason = ""
                                 else if (reason.isBlank()) reason = defaultReason
                             },
                         )
                         Text(option.label)
                     }
                 }
-                OutlinedTextField(
-                    value = reason,
-                    onValueChange = { reason = it },
-                    label = { Text("原因或备注（可选）") },
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    maxLines = 3,
-                )
-                if (status != AttendanceStatus.PRESENT && presetReasons.isNotEmpty()) {
+                if (statusUsesReason(status)) {
+                    OutlinedTextField(
+                        value = reason,
+                        onValueChange = { reason = it },
+                        label = { Text("原因或备注（可选）") },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        maxLines = 3,
+                    )
+                }
+                if (statusUsesReason(status) && presetReasons.isNotEmpty()) {
                     Text(
                         "常用原因",
                         style = MaterialTheme.typography.labelMedium,
@@ -1945,7 +2329,11 @@ private fun TextInputDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SimpleBackBar(title: String, onBack: () -> Unit) {
+private fun SimpleBackBar(
+    title: String,
+    onBack: () -> Unit,
+    actions: @Composable RowScope.() -> Unit = {},
+) {
     TopAppBar(
         title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         navigationIcon = {
@@ -1953,6 +2341,7 @@ private fun SimpleBackBar(title: String, onBack: () -> Unit) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
             }
         },
+        actions = actions,
     )
 }
 
@@ -2007,7 +2396,26 @@ private fun statusImageVector(option: StatusIconOption): ImageVector = when (opt
     StatusIconOption.WARNING -> Icons.Default.Warning
     StatusIconOption.STAR -> Icons.Default.Star
     StatusIconOption.HELP -> Icons.Default.Help
+    StatusIconOption.REMOVE -> Icons.Default.RemoveCircle
 }
+
+@Composable
+private fun statusColor(option: StatusColorOption): Color = when (option) {
+    StatusColorOption.PRIMARY -> MaterialTheme.colorScheme.primary
+    StatusColorOption.GREEN -> Color(0xFF2E7D32)
+    StatusColorOption.AMBER -> Color(0xFFF57C00)
+    StatusColorOption.BLUE -> Color(0xFF1565C0)
+    StatusColorOption.RED -> Color(0xFFC62828)
+    StatusColorOption.PURPLE -> Color(0xFF6A1B9A)
+    StatusColorOption.TEAL -> Color(0xFF00796B)
+    StatusColorOption.GRAY -> Color(0xFF616161)
+}
+
+private fun statusUsesReason(status: AttendanceStatus): Boolean = status in setOf(
+    AttendanceStatus.LATE,
+    AttendanceStatus.LEAVE,
+    AttendanceStatus.ABSENT,
+)
 
 private fun buildAttendanceExport(
     group: ClassGroup,
@@ -2028,7 +2436,8 @@ private fun buildAttendanceExport(
             "到场 ${counts.getValue(AttendanceStatus.PRESENT)}，" +
                 "迟到 ${counts.getValue(AttendanceStatus.LATE)}，" +
                 "请假 ${counts.getValue(AttendanceStatus.LEAVE)}，" +
-                "缺勤 ${counts.getValue(AttendanceStatus.ABSENT)}",
+                "缺勤 ${counts.getValue(AttendanceStatus.ABSENT)}，" +
+                "不参与 ${counts.getValue(AttendanceStatus.EXEMPT)}",
         )
     }
     val includedEntries = session.entries.filter {
@@ -2036,19 +2445,40 @@ private fun buildAttendanceExport(
     }
     if (includedEntries.isNotEmpty()) {
         if (isNotEmpty()) appendLine()
-        appendLine("人员明细")
-        includedEntries.forEach { entry ->
-            append("[${entry.status.label}] ")
-            if (settings.exportStudentNumber && entry.studentNumber.isNotBlank()) {
-                append("${entry.studentNumber} ")
+        if (settings.groupResultsByStatus) {
+            listOf(
+                AttendanceStatus.PRESENT,
+                AttendanceStatus.LATE,
+                AttendanceStatus.LEAVE,
+                AttendanceStatus.ABSENT,
+                AttendanceStatus.EXEMPT,
+            ).forEach { status ->
+                val entries = includedEntries.filter { it.status == status }
+                if (entries.isNotEmpty()) {
+                    appendLine("${status.label}（${entries.size}）")
+                    entries.forEach { entry -> appendExportEntry(entry, settings) }
+                    appendLine()
+                }
             }
-            append(entry.studentName)
-            if (settings.exportReason && entry.reason.isNotBlank()) {
-                append("（${entry.reason}）")
+        } else {
+            appendLine("人员明细")
+            includedEntries.forEach { entry ->
+                append("[${entry.status.label}] ")
+                appendExportEntry(entry, settings)
             }
-            appendLine()
         }
     } else if (isEmpty()) {
         append("无可导出的点名内容")
     }
 }.trimEnd()
+
+private fun StringBuilder.appendExportEntry(entry: AttendanceEntry, settings: AppSettings) {
+    if (settings.exportStudentNumber && entry.studentNumber.isNotBlank()) {
+        append("${entry.studentNumber} ")
+    }
+    append(entry.studentName)
+    if (settings.exportReason && entry.reason.isNotBlank()) {
+        append("（${entry.reason}）")
+    }
+    appendLine()
+}
