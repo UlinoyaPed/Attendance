@@ -96,7 +96,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -2248,7 +2251,9 @@ private fun RollCallItem(
     val maximumDrag = remember(density) { with(density) { 112.dp.toPx() } }
     var horizontalOffset by remember(student.id) { mutableFloatStateOf(0f) }
     val markColor = colorOption?.let { statusColor(it) }
-    val container = markColor?.copy(alpha = 0.16f) ?: MaterialTheme.colorScheme.surfaceContainerLow
+    // Pre-composite the tint so the swipe background cannot bleed through the card.
+    val surfaceColor = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 1f)
+    val container = markColor?.copy(alpha = 0.16f)?.compositeOver(surfaceColor) ?: surfaceColor
 
     fun resetHorizontalOffset() {
         val start = horizontalOffset
@@ -2266,6 +2271,18 @@ private fun RollCallItem(
             Box(
                 modifier = Modifier
                     .matchParentSize()
+                    .drawWithContent {
+                        // Reveal only the strip vacated by the foreground card, including
+                        // during the return animation. Never draw labels beneath its content.
+                        val revealed = horizontalOffset.roundToInt().toFloat()
+                            .coerceIn(-size.width, size.width)
+                        clipRect(
+                            left = if (revealed >= 0f) 0f else size.width + revealed,
+                            right = if (revealed >= 0f) revealed else size.width,
+                        ) {
+                            this@drawWithContent.drawContent()
+                        }
+                    }
                     .background(MaterialTheme.colorScheme.secondaryContainer)
                     .padding(horizontal = 20.dp),
                 contentAlignment = if (horizontalOffset > 0f) Alignment.CenterStart else Alignment.CenterEnd,
