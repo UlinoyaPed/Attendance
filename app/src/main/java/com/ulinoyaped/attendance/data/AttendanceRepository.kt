@@ -116,6 +116,30 @@ class AttendanceRepository(context: Context) {
         saveSessions()
     }
 
+    fun updateSessionEntry(
+        sessionId: String,
+        studentId: String,
+        status: AttendanceStatus,
+        reason: String,
+    ) {
+        _sessions.value = _sessions.value.map { session ->
+            if (session.id != sessionId) {
+                session
+            } else {
+                session.copy(
+                    entries = session.entries.map { entry ->
+                        if (entry.studentId == studentId) {
+                            entry.copy(status = status, reason = reason.trim())
+                        } else {
+                            entry
+                        }
+                    },
+                )
+            }
+        }
+        saveSessions()
+    }
+
     fun addAbsenceReason(reason: String) {
         val cleanReason = reason.trim()
         if (cleanReason.isEmpty() || _settings.value.absenceReasons.any { it == cleanReason }) return

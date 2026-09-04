@@ -332,6 +332,9 @@ fun AttendanceApp() {
                     group = group,
                     session = session,
                     settings = settings,
+                    onUpdateEntry = { studentId, status, reason ->
+                        repository.updateSessionEntry(session.id, studentId, status, reason)
+                    },
                     onBack = {
                         screen = when (current.backTarget) {
                             ResultBackTarget.CLASSES -> Screen.Root(RootTab.CLASSES)
@@ -1092,6 +1095,7 @@ private fun ResultScreen(
     group: ClassGroup,
     session: AttendanceSession,
     settings: AppSettings,
+    onUpdateEntry: (String, AttendanceStatus, String) -> Unit,
     onBack: () -> Unit,
 ) {
     val effectiveSettings = settings.forClass(group)
@@ -1099,6 +1103,7 @@ private fun ResultScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var showExportDialog by remember { mutableStateOf(false) }
+    var entryToEdit by remember { mutableStateOf<AttendanceEntry?>(null) }
     val exportText = remember(group, session, effectiveSettings) {
         buildAttendanceExport(group, session, effectiveSettings)
     }
@@ -1184,7 +1189,11 @@ private fun ResultScreen(
                             item(key = "empty-${status.name}") { HintCard("此分类暂无学生") }
                         } else {
                             items(entries, key = { "${status.name}-${it.studentId}" }) { entry ->
-                                ResultEntryItem(entry, effectiveSettings)
+                                ResultEntryItem(
+                                    entry = entry,
+                                    settings = effectiveSettings,
+                                    onEdit = { entryToEdit = entry },
+                                )
                             }
                         }
                     }
@@ -1192,7 +1201,11 @@ private fun ResultScreen(
             } else {
                 item { SectionTitle("人员明细 · ${session.entries.size}") }
                 items(session.entries, key = { it.studentId }) { entry ->
-                    CompactResultItem(entry, effectiveSettings)
+                    CompactResultItem(
+                        entry = entry,
+                        settings = effectiveSettings,
+                        onEdit = { entryToEdit = entry },
+                    )
                 }
             }
         }
@@ -1239,6 +1252,20 @@ private fun ResultScreen(
                     Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("保存文件", modifier = Modifier.padding(start = 4.dp))
                 }
+            },
+        )
+    }
+
+    entryToEdit?.let { entry ->
+        StatusDialog(
+            student = Student(entry.studentId, entry.studentName, entry.studentNumber),
+            initial = Mark(entry.status, entry.reason),
+            presetReasons = effectiveSettings.absenceReasons,
+            defaultReason = effectiveSettings.defaultReason,
+            onDismiss = { entryToEdit = null },
+            onConfirm = { mark ->
+                onUpdateEntry(entry.studentId, mark.status, mark.reason)
+                entryToEdit = null
             },
         )
     }
@@ -2413,7 +2440,11 @@ private fun DeleteHistoryDialog(
 }
 
 @Composable
-private fun ResultEntryItem(entry: AttendanceEntry, settings: AppSettings) {
+private fun ResultEntryItem(
+    entry: AttendanceEntry,
+    settings: AppSettings,
+    onEdit: () -> Unit,
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
@@ -2435,13 +2466,25 @@ private fun ResultEntryItem(entry: AttendanceEntry, settings: AppSettings) {
                     Text("原因：${entry.reason}", modifier = Modifier.padding(top = 5.dp))
                 }
             }
+            IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    Icons.Default.Edit,
+                    contentDescription = "编辑${entry.studentName}的点名记录",
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Spacer(Modifier.width(4.dp))
             StatusBadge(entry.status, settings.iconFor(entry.status), settings.colorFor(entry.status))
         }
     }
 }
 
 @Composable
-private fun CompactResultItem(entry: AttendanceEntry, settings: AppSettings) {
+private fun CompactResultItem(
+    entry: AttendanceEntry,
+    settings: AppSettings,
+    onEdit: () -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -2455,6 +2498,14 @@ private fun CompactResultItem(entry: AttendanceEntry, settings: AppSettings) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
+            Icon(
+                Icons.Default.Edit,
+                contentDescription = "编辑${entry.studentName}的点名记录",
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        Spacer(Modifier.width(4.dp))
         StatusBadge(entry.status, settings.iconFor(entry.status), settings.colorFor(entry.status))
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
