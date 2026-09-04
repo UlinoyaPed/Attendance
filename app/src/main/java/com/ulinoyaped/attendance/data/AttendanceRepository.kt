@@ -89,6 +89,11 @@ class AttendanceRepository(context: Context) {
         return session.id
     }
 
+    fun deleteSession(sessionId: String) {
+        _sessions.value = _sessions.value.filterNot { it.id == sessionId }
+        saveSessions()
+    }
+
     fun addAbsenceReason(reason: String) {
         val cleanReason = reason.trim()
         if (cleanReason.isEmpty() || _settings.value.absenceReasons.any { it == cleanReason }) return
@@ -125,6 +130,29 @@ class AttendanceRepository(context: Context) {
     fun setSwipeRightAction(action: GestureAction) {
         updateSettings(_settings.value.copy(swipeRightAction = action))
     }
+
+    fun setStatusIcon(status: AttendanceStatus, icon: StatusIconOption) {
+        val updated = when (status) {
+            AttendanceStatus.PRESENT -> _settings.value.copy(presentIcon = icon)
+            AttendanceStatus.LATE -> _settings.value.copy(lateIcon = icon)
+            AttendanceStatus.LEAVE -> _settings.value.copy(leaveIcon = icon)
+            AttendanceStatus.ABSENT -> _settings.value.copy(absentIcon = icon)
+            AttendanceStatus.UNMARKED -> return
+        }
+        updateSettings(updated)
+    }
+
+    fun setExportHeader(enabled: Boolean) = updateSettings(_settings.value.copy(exportHeader = enabled))
+
+    fun setExportSummary(enabled: Boolean) = updateSettings(_settings.value.copy(exportSummary = enabled))
+
+    fun setExportPresentStudents(enabled: Boolean) =
+        updateSettings(_settings.value.copy(exportPresentStudents = enabled))
+
+    fun setExportStudentNumber(enabled: Boolean) =
+        updateSettings(_settings.value.copy(exportStudentNumber = enabled))
+
+    fun setExportReason(enabled: Boolean) = updateSettings(_settings.value.copy(exportReason = enabled))
 
     private fun updateClass(classId: String, transform: (ClassGroup) -> ClassGroup) {
         _classes.value = _classes.value.map { group ->
@@ -190,6 +218,15 @@ class AttendanceRepository(context: Context) {
             .put("longPressAction", settings.longPressAction.name)
             .put("swipeLeftAction", settings.swipeLeftAction.name)
             .put("swipeRightAction", settings.swipeRightAction.name)
+            .put("presentIcon", settings.presentIcon.name)
+            .put("lateIcon", settings.lateIcon.name)
+            .put("leaveIcon", settings.leaveIcon.name)
+            .put("absentIcon", settings.absentIcon.name)
+            .put("exportHeader", settings.exportHeader)
+            .put("exportSummary", settings.exportSummary)
+            .put("exportPresentStudents", settings.exportPresentStudents)
+            .put("exportStudentNumber", settings.exportStudentNumber)
+            .put("exportReason", settings.exportReason)
         preferences.edit().putString(KEY_SETTINGS, json.toString()).apply()
     }
 
@@ -271,6 +308,15 @@ class AttendanceRepository(context: Context) {
             longPressAction = enumValueOrDefault(json.optString("longPressAction"), defaults.longPressAction),
             swipeLeftAction = enumValueOrDefault(json.optString("swipeLeftAction"), defaults.swipeLeftAction),
             swipeRightAction = enumValueOrDefault(json.optString("swipeRightAction"), defaults.swipeRightAction),
+            presentIcon = enumValueOrDefault(json.optString("presentIcon"), defaults.presentIcon),
+            lateIcon = enumValueOrDefault(json.optString("lateIcon"), defaults.lateIcon),
+            leaveIcon = enumValueOrDefault(json.optString("leaveIcon"), defaults.leaveIcon),
+            absentIcon = enumValueOrDefault(json.optString("absentIcon"), defaults.absentIcon),
+            exportHeader = json.optBoolean("exportHeader", defaults.exportHeader),
+            exportSummary = json.optBoolean("exportSummary", defaults.exportSummary),
+            exportPresentStudents = json.optBoolean("exportPresentStudents", defaults.exportPresentStudents),
+            exportStudentNumber = json.optBoolean("exportStudentNumber", defaults.exportStudentNumber),
+            exportReason = json.optBoolean("exportReason", defaults.exportReason),
         )
     }.getOrDefault(AppSettings())
 

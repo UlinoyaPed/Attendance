@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">点名</string>
+    <color name="ic_launcher_background">#475D92</color>
 </resources>

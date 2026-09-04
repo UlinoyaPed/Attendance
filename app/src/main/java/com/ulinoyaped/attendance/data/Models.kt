@@ -44,6 +44,17 @@ enum class GestureAction(val label: String) {
     CLEAR("清除标记"),
 }
 
+enum class StatusIconOption(val label: String) {
+    CHECK("对勾"),
+    PERSON("人物"),
+    SCHEDULE("时钟"),
+    EVENT_BUSY("日历叉号"),
+    CLOSE("叉号"),
+    WARNING("警告"),
+    STAR("星标"),
+    HELP("问号"),
+}
+
 data class AppSettings(
     val absenceReasons: List<String> = listOf("病假", "事假", "公假", "早退", "其他"),
     val defaultReason: String = "",
@@ -51,7 +62,24 @@ data class AppSettings(
     val longPressAction: GestureAction = GestureAction.EDIT,
     val swipeLeftAction: GestureAction = GestureAction.ABSENT,
     val swipeRightAction: GestureAction = GestureAction.PRESENT,
+    val presentIcon: StatusIconOption = StatusIconOption.CHECK,
+    val lateIcon: StatusIconOption = StatusIconOption.SCHEDULE,
+    val leaveIcon: StatusIconOption = StatusIconOption.EVENT_BUSY,
+    val absentIcon: StatusIconOption = StatusIconOption.CLOSE,
+    val exportHeader: Boolean = true,
+    val exportSummary: Boolean = true,
+    val exportPresentStudents: Boolean = true,
+    val exportStudentNumber: Boolean = true,
+    val exportReason: Boolean = true,
 )
+
+fun AppSettings.iconFor(status: AttendanceStatus): StatusIconOption = when (status) {
+    AttendanceStatus.PRESENT -> presentIcon
+    AttendanceStatus.LATE -> lateIcon
+    AttendanceStatus.LEAVE -> leaveIcon
+    AttendanceStatus.ABSENT -> absentIcon
+    AttendanceStatus.UNMARKED -> StatusIconOption.HELP
+}
 
 data class ImportedStudent(
     val name: String,

@@ -1,5 +1,9 @@
 package com.ulinoyaped.attendance
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
@@ -25,6 +29,25 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.EventBusy
+import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Help
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -33,6 +56,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -43,6 +68,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -60,6 +86,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -74,7 +101,9 @@ import com.ulinoyaped.attendance.data.AttendanceStatus
 import com.ulinoyaped.attendance.data.AppSettings
 import com.ulinoyaped.attendance.data.ClassGroup
 import com.ulinoyaped.attendance.data.GestureAction
+import com.ulinoyaped.attendance.data.StatusIconOption
 import com.ulinoyaped.attendance.data.Student
+import com.ulinoyaped.attendance.data.iconFor
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -87,10 +116,10 @@ private sealed interface Screen {
     data class Result(val classId: String, val sessionId: String, val backToHistory: Boolean = false) : Screen
 }
 
-private enum class RootTab(val label: String, val shortLabel: String) {
-    CLASSES("班级", "班"),
-    HISTORY("历史", "史"),
-    SETTINGS("设置", "设"),
+private enum class RootTab(val label: String) {
+    CLASSES("班级"),
+    HISTORY("历史"),
+    SETTINGS("设置"),
 }
 
 private data class Mark(
@@ -104,6 +133,10 @@ private enum class SettingSelector {
     LONG_PRESS,
     SWIPE_LEFT,
     SWIPE_RIGHT,
+    ICON_PRESENT,
+    ICON_LATE,
+    ICON_LEAVE,
+    ICON_ABSENT,
 }
 
 @Composable
@@ -114,6 +147,19 @@ fun AttendanceApp() {
     val sessions by repository.sessions.collectAsStateWithLifecycle()
     val settings by repository.settings.collectAsStateWithLifecycle()
     var screen: Screen by remember { mutableStateOf(Screen.Root(RootTab.CLASSES)) }
+    val backTarget = screen
+    BackHandler(enabled = backTarget !is Screen.Root || backTarget.tab != RootTab.CLASSES) {
+        screen = when (val current = screen) {
+            is Screen.Root -> Screen.Root(RootTab.CLASSES)
+            is Screen.ClassDetail -> Screen.Root(RootTab.CLASSES)
+            is Screen.RollCall -> Screen.ClassDetail(current.classId)
+            is Screen.Result -> if (current.backToHistory) {
+                Screen.Root(RootTab.HISTORY)
+            } else {
+                Screen.ClassDetail(current.classId)
+            }
+        }
+    }
 
     when (val current = screen) {
         is Screen.Root -> RootScreen(
@@ -126,6 +172,7 @@ fun AttendanceApp() {
             onOpenClass = { screen = Screen.ClassDetail(it) },
             onDeleteClass = repository::deleteClass,
             onOpenResult = { classId, sessionId -> screen = Screen.Result(classId, sessionId, true) },
+            onDeleteSession = repository::deleteSession,
             onAddReason = repository::addAbsenceReason,
             onRemoveReason = repository::removeAbsenceReason,
             onSetDefaultReason = repository::setDefaultReason,
@@ -133,6 +180,12 @@ fun AttendanceApp() {
             onSetLongPressAction = repository::setLongPressAction,
             onSetSwipeLeftAction = repository::setSwipeLeftAction,
             onSetSwipeRightAction = repository::setSwipeRightAction,
+            onSetStatusIcon = repository::setStatusIcon,
+            onSetExportHeader = repository::setExportHeader,
+            onSetExportSummary = repository::setExportSummary,
+            onSetExportPresentStudents = repository::setExportPresentStudents,
+            onSetExportStudentNumber = repository::setExportStudentNumber,
+            onSetExportReason = repository::setExportReason,
         )
 
         is Screen.ClassDetail -> {
@@ -149,6 +202,7 @@ fun AttendanceApp() {
                     onImport = { repository.importStudents(group.id, it) },
                     onStart = { screen = Screen.RollCall(group.id) },
                     onOpenResult = { screen = Screen.Result(group.id, it) },
+                    onDeleteSession = repository::deleteSession,
                 )
             }
         }
@@ -179,6 +233,7 @@ fun AttendanceApp() {
                 ResultScreen(
                     group = group,
                     session = session,
+                    settings = settings,
                     onBack = {
                         screen = if (current.backToHistory) {
                             Screen.Root(RootTab.HISTORY)
@@ -203,6 +258,7 @@ private fun RootScreen(
     onOpenClass: (String) -> Unit,
     onDeleteClass: (String) -> Unit,
     onOpenResult: (String, String) -> Unit,
+    onDeleteSession: (String) -> Unit,
     onAddReason: (String) -> Unit,
     onRemoveReason: (String) -> Unit,
     onSetDefaultReason: (String) -> Unit,
@@ -210,6 +266,12 @@ private fun RootScreen(
     onSetLongPressAction: (GestureAction) -> Unit,
     onSetSwipeLeftAction: (GestureAction) -> Unit,
     onSetSwipeRightAction: (GestureAction) -> Unit,
+    onSetStatusIcon: (AttendanceStatus, StatusIconOption) -> Unit,
+    onSetExportHeader: (Boolean) -> Unit,
+    onSetExportSummary: (Boolean) -> Unit,
+    onSetExportPresentStudents: (Boolean) -> Unit,
+    onSetExportStudentNumber: (Boolean) -> Unit,
+    onSetExportReason: (Boolean) -> Unit,
 ) {
     val bottomBar: @Composable () -> Unit = {
         RootNavigationBar(selectedTab = selectedTab, onSelectTab = onSelectTab)
@@ -226,6 +288,7 @@ private fun RootScreen(
             classes = classes,
             sessions = sessions,
             onOpenResult = onOpenResult,
+            onDeleteSession = onDeleteSession,
             bottomBar = bottomBar,
         )
         RootTab.SETTINGS -> SettingsScreen(
@@ -237,6 +300,12 @@ private fun RootScreen(
             onSetLongPressAction = onSetLongPressAction,
             onSetSwipeLeftAction = onSetSwipeLeftAction,
             onSetSwipeRightAction = onSetSwipeRightAction,
+            onSetStatusIcon = onSetStatusIcon,
+            onSetExportHeader = onSetExportHeader,
+            onSetExportSummary = onSetExportSummary,
+            onSetExportPresentStudents = onSetExportPresentStudents,
+            onSetExportStudentNumber = onSetExportStudentNumber,
+            onSetExportReason = onSetExportReason,
             bottomBar = bottomBar,
         )
     }
@@ -246,10 +315,15 @@ private fun RootScreen(
 private fun RootNavigationBar(selectedTab: RootTab, onSelectTab: (RootTab) -> Unit) {
     NavigationBar {
         RootTab.entries.forEach { tab ->
+            val icon = when (tab) {
+                RootTab.CLASSES -> Icons.Default.Groups
+                RootTab.HISTORY -> Icons.Default.History
+                RootTab.SETTINGS -> Icons.Default.Settings
+            }
             NavigationBarItem(
                 selected = selectedTab == tab,
                 onClick = { onSelectTab(tab) },
-                icon = { Text(tab.shortLabel, fontWeight = FontWeight.Bold) },
+                icon = { Icon(icon, contentDescription = tab.label) },
                 label = { Text(tab.label) },
             )
         }
@@ -273,7 +347,7 @@ private fun ClassesScreen(
         bottomBar = bottomBar,
         floatingActionButton = {
             FloatingActionButton(onClick = { showAddDialog = true }) {
-                Text("+", fontSize = 28.sp)
+                Icon(Icons.Default.Add, contentDescription = "创建班级")
             }
         },
     ) { padding ->
@@ -361,6 +435,7 @@ private fun ClassDetailScreen(
     onImport: (String) -> Int,
     onStart: () -> Unit,
     onOpenResult: (String) -> Unit,
+    onDeleteSession: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -369,6 +444,7 @@ private fun ClassDetailScreen(
     var showImportOptions by remember { mutableStateOf(false) }
     var showTextImport by remember { mutableStateOf(false) }
     var studentToDelete by remember { mutableStateOf<Student?>(null) }
+    var sessionToDelete by remember { mutableStateOf<AttendanceSession?>(null) }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             val result = runCatching {
@@ -401,6 +477,8 @@ private fun ClassDetailScreen(
                     enabled = group.students.isNotEmpty(),
                     modifier = Modifier.fillMaxWidth().height(52.dp),
                 ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(6.dp))
                     Text(if (group.students.isEmpty()) "添加学生后开始点名" else "开始点名")
                 }
             }
@@ -412,11 +490,17 @@ private fun ClassDetailScreen(
                     OutlinedButton(
                         onClick = { showAddStudent = true },
                         modifier = Modifier.weight(1f),
-                    ) { Text("手动添加") }
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Text("手动添加", modifier = Modifier.padding(start = 5.dp))
+                    }
                     OutlinedButton(
                         onClick = { showImportOptions = true },
                         modifier = Modifier.weight(1f),
-                    ) { Text("导入名单") }
+                    ) {
+                        Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Text("导入名单", modifier = Modifier.padding(start = 5.dp))
+                    }
                 }
             }
             item { SectionTitle("学生名单 · ${group.students.size}") }
@@ -432,7 +516,11 @@ private fun ClassDetailScreen(
             if (sessions.isNotEmpty()) {
                 item { SectionTitle("历史记录") }
                 items(sessions, key = { it.id }) { session ->
-                    HistoryItem(session = session, onClick = { onOpenResult(session.id) })
+                    HistoryItem(
+                        session = session,
+                        onClick = { onOpenResult(session.id) },
+                        onDelete = { sessionToDelete = session },
+                    )
                 }
             }
         }
@@ -502,6 +590,16 @@ private fun ClassDetailScreen(
             },
             dismissButton = {
                 TextButton(onClick = { studentToDelete = null }) { Text("取消") }
+            },
+        )
+    }
+    sessionToDelete?.let { session ->
+        DeleteHistoryDialog(
+            session = session,
+            onDismiss = { sessionToDelete = null },
+            onConfirm = {
+                onDeleteSession(session.id)
+                sessionToDelete = null
             },
         )
     }
@@ -581,6 +679,7 @@ private fun RollCallScreen(
                 RollCallItem(
                     student = student,
                     mark = mark,
+                    iconOption = mark?.status?.let { settings.iconFor(it) },
                     onTogglePresent = {
                         if (mark?.status == settings.defaultStatus) {
                             marks.remove(student.id)
@@ -640,14 +739,49 @@ private fun RollCallScreen(
 private fun ResultScreen(
     group: ClassGroup,
     session: AttendanceSession,
+    settings: AppSettings,
     onBack: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    var showExportDialog by remember { mutableStateOf(false) }
+    val exportText = remember(group, session, settings) { buildAttendanceExport(group, session, settings) }
+    val saveLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        if (uri != null) {
+            val saved = runCatching {
+                context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(exportText) }
+                    ?: error("无法写入文件")
+            }.isSuccess
+            scope.launch { snackbarHostState.showSnackbar(if (saved) "文本已保存" else "保存失败") }
+        }
+    }
     val counts = AttendanceStatus.entries.associateWith { status ->
         session.entries.count { it.status == status }
     }
     val exceptional = session.entries.filter { it.status != AttendanceStatus.PRESENT }
 
-    Scaffold(topBar = { SimpleBackBar("点名结果", onBack) }) { padding ->
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("点名结果") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    TextButton(onClick = { showExportDialog = true }) {
+                        Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Text("导出", modifier = Modifier.padding(start = 4.dp))
+                    }
+                },
+            )
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+    ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 32.dp),
@@ -665,10 +799,10 @@ private fun ResultScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    SummaryCard("到", counts.getValue(AttendanceStatus.PRESENT), Modifier.weight(1f))
-                    SummaryCard("迟到", counts.getValue(AttendanceStatus.LATE), Modifier.weight(1f))
-                    SummaryCard("请假", counts.getValue(AttendanceStatus.LEAVE), Modifier.weight(1f))
-                    SummaryCard("缺勤", counts.getValue(AttendanceStatus.ABSENT), Modifier.weight(1f))
+                    SummaryCard("到", counts.getValue(AttendanceStatus.PRESENT), settings.presentIcon, Modifier.weight(1f))
+                    SummaryCard("迟到", counts.getValue(AttendanceStatus.LATE), settings.lateIcon, Modifier.weight(1f))
+                    SummaryCard("请假", counts.getValue(AttendanceStatus.LEAVE), settings.leaveIcon, Modifier.weight(1f))
+                    SummaryCard("缺勤", counts.getValue(AttendanceStatus.ABSENT), settings.absentIcon, Modifier.weight(1f))
                 }
             }
             item { SectionTitle("异常情况") }
@@ -676,14 +810,59 @@ private fun ResultScreen(
                 item { HintCard("全员到齐") }
             } else {
                 items(exceptional, key = { it.studentId }) { entry ->
-                    ResultEntryItem(entry)
+                    ResultEntryItem(entry, settings.iconFor(entry.status))
                 }
             }
             item { SectionTitle("全部学生 · ${session.entries.size}") }
             items(session.entries, key = { "all-${it.studentId}" }) { entry ->
-                CompactResultItem(entry)
+                CompactResultItem(entry, settings.iconFor(entry.status))
             }
         }
+    }
+
+    if (showExportDialog) {
+        AlertDialog(
+            onDismissRequest = { showExportDialog = false },
+            title = { Text("导出本次点名") },
+            text = {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text(
+                        exportText,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 12,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("点名结果", exportText))
+                        showExportDialog = false
+                        scope.launch { snackbarHostState.showSnackbar("已复制到剪贴板") }
+                    },
+                ) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("复制文本", modifier = Modifier.padding(start = 4.dp))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showExportDialog = false
+                        saveLauncher.launch("attendance-${formatFileTime(session.createdAt)}.txt")
+                    },
+                ) {
+                    Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("保存文件", modifier = Modifier.padding(start = 4.dp))
+                }
+            },
+        )
     }
 }
 
@@ -693,9 +872,11 @@ private fun HistoryScreen(
     classes: List<ClassGroup>,
     sessions: List<AttendanceSession>,
     onOpenResult: (String, String) -> Unit,
+    onDeleteSession: (String) -> Unit,
     bottomBar: @Composable () -> Unit,
 ) {
     val classNames = classes.associate { it.id to it.name }
+    var sessionToDelete by remember { mutableStateOf<AttendanceSession?>(null) }
     Scaffold(
         topBar = { TopAppBar(title = { Text("点名历史") }) },
         bottomBar = bottomBar,
@@ -717,10 +898,21 @@ private fun HistoryScreen(
                         className = classNames[session.classId].orEmpty(),
                         session = session,
                         onClick = { onOpenResult(session.classId, session.id) },
+                        onDelete = { sessionToDelete = session },
                     )
                 }
             }
         }
+    }
+    sessionToDelete?.let { session ->
+        DeleteHistoryDialog(
+            session = session,
+            onDismiss = { sessionToDelete = null },
+            onConfirm = {
+                onDeleteSession(session.id)
+                sessionToDelete = null
+            },
+        )
     }
 }
 
@@ -735,6 +927,12 @@ private fun SettingsScreen(
     onSetLongPressAction: (GestureAction) -> Unit,
     onSetSwipeLeftAction: (GestureAction) -> Unit,
     onSetSwipeRightAction: (GestureAction) -> Unit,
+    onSetStatusIcon: (AttendanceStatus, StatusIconOption) -> Unit,
+    onSetExportHeader: (Boolean) -> Unit,
+    onSetExportSummary: (Boolean) -> Unit,
+    onSetExportPresentStudents: (Boolean) -> Unit,
+    onSetExportStudentNumber: (Boolean) -> Unit,
+    onSetExportReason: (Boolean) -> Unit,
     bottomBar: @Composable () -> Unit,
 ) {
     var showAddReason by remember { mutableStateOf(false) }
@@ -790,6 +988,18 @@ private fun SettingsScreen(
                     modifier = Modifier.padding(horizontal = 4.dp),
                 )
             }
+            item { SectionTitle("状态图标") }
+            item {
+                SettingsGroup {
+                    IconSettingRow("到场", settings.presentIcon) { selector = SettingSelector.ICON_PRESENT }
+                    HorizontalDivider()
+                    IconSettingRow("迟到", settings.lateIcon) { selector = SettingSelector.ICON_LATE }
+                    HorizontalDivider()
+                    IconSettingRow("请假", settings.leaveIcon) { selector = SettingSelector.ICON_LEAVE }
+                    HorizontalDivider()
+                    IconSettingRow("缺勤", settings.absentIcon) { selector = SettingSelector.ICON_ABSENT }
+                }
+            }
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
@@ -816,6 +1026,20 @@ private fun SettingsScreen(
                             TextButton(onClick = { onRemoveReason(reason) }) { Text("删除") }
                         }
                     }
+                }
+            }
+            item { SectionTitle("文本导出内容") }
+            item {
+                SettingsGroup {
+                    SwitchSettingRow("班级与点名时间", settings.exportHeader, onSetExportHeader)
+                    HorizontalDivider()
+                    SwitchSettingRow("到勤统计", settings.exportSummary, onSetExportSummary)
+                    HorizontalDivider()
+                    SwitchSettingRow("到场学生明细", settings.exportPresentStudents, onSetExportPresentStudents)
+                    HorizontalDivider()
+                    SwitchSettingRow("学生学号", settings.exportStudentNumber, onSetExportStudentNumber)
+                    HorizontalDivider()
+                    SwitchSettingRow("原因或备注", settings.exportReason, onSetExportReason)
                 }
             }
         }
@@ -866,6 +1090,30 @@ private fun SettingsScreen(
                 onDismiss = { selector = null },
                 onSelect = { onSetSwipeRightAction(it); selector = null },
             )
+            SettingSelector.ICON_PRESENT -> IconChoiceDialog(
+                title = "到场图标",
+                selected = settings.presentIcon,
+                onDismiss = { selector = null },
+                onSelect = { onSetStatusIcon(AttendanceStatus.PRESENT, it); selector = null },
+            )
+            SettingSelector.ICON_LATE -> IconChoiceDialog(
+                title = "迟到图标",
+                selected = settings.lateIcon,
+                onDismiss = { selector = null },
+                onSelect = { onSetStatusIcon(AttendanceStatus.LATE, it); selector = null },
+            )
+            SettingSelector.ICON_LEAVE -> IconChoiceDialog(
+                title = "请假图标",
+                selected = settings.leaveIcon,
+                onDismiss = { selector = null },
+                onSelect = { onSetStatusIcon(AttendanceStatus.LEAVE, it); selector = null },
+            )
+            SettingSelector.ICON_ABSENT -> IconChoiceDialog(
+                title = "缺勤图标",
+                selected = settings.absentIcon,
+                onDismiss = { selector = null },
+                onSelect = { onSetStatusIcon(AttendanceStatus.ABSENT, it); selector = null },
+            )
         }
     }
 }
@@ -890,6 +1138,29 @@ private fun SettingRow(title: String, value: String, onClick: () -> Unit) {
         Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
         Text(value, color = MaterialTheme.colorScheme.primary)
         Text("  ›", fontSize = 22.sp)
+    }
+}
+
+@Composable
+private fun IconSettingRow(title: String, option: StatusIconOption, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(16.dp, 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+        Icon(statusImageVector(option), contentDescription = option.label, modifier = Modifier.size(20.dp))
+        Text(" ${option.label}  ›", color = MaterialTheme.colorScheme.primary)
+    }
+}
+
+@Composable
+private fun SwitchSettingRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable { onCheckedChange(!checked) }.padding(16.dp, 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
@@ -937,6 +1208,34 @@ private fun ReasonChoiceDialog(
 }
 
 @Composable
+private fun IconChoiceDialog(
+    title: String,
+    selected: StatusIconOption,
+    onDismiss: () -> Unit,
+    onSelect: (StatusIconOption) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                StatusIconOption.entries.forEach { option ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable { onSelect(option) }.padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = option == selected, onClick = { onSelect(option) })
+                        Icon(statusImageVector(option), contentDescription = null, modifier = Modifier.size(21.dp))
+                        Text(option.label, modifier = Modifier.padding(start = 10.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
 private fun GestureChoiceDialog(
     title: String,
     selected: GestureAction,
@@ -973,6 +1272,7 @@ private fun ChoiceRow(label: String, selected: Boolean, onClick: () -> Unit) {
 private fun RollCallItem(
     student: Student,
     mark: Mark?,
+    iconOption: StatusIconOption?,
     onTogglePresent: () -> Unit,
     onLongPress: () -> Unit,
     onSwipeLeft: () -> Unit,
@@ -1032,11 +1332,11 @@ private fun RollCallItem(
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        if (marked) "✓" else "",
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 20.sp,
+                    Icon(
+                        imageVector = iconOption?.let(::statusImageVector) ?: Icons.Default.Person,
+                        contentDescription = mark?.status?.label ?: "未点",
+                        tint = if (marked) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
                     )
                 }
                 Spacer(Modifier.width(12.dp))
@@ -1089,7 +1389,7 @@ private fun StudentListItem(student: Student, onDelete: () -> Unit) {
 }
 
 @Composable
-private fun HistoryItem(session: AttendanceSession, onClick: () -> Unit) {
+private fun HistoryItem(session: AttendanceSession, onClick: () -> Unit, onDelete: () -> Unit) {
     val absent = session.entries.count { it.status == AttendanceStatus.ABSENT }
     val leave = session.entries.count { it.status == AttendanceStatus.LEAVE }
     val late = session.entries.count { it.status == AttendanceStatus.LATE }
@@ -1110,13 +1410,20 @@ private fun HistoryItem(session: AttendanceSession, onClick: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Text("›", fontSize = 28.sp)
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Default.Delete, contentDescription = "删除记录")
+            }
         }
     }
 }
 
 @Composable
-private fun GlobalHistoryItem(className: String, session: AttendanceSession, onClick: () -> Unit) {
+private fun GlobalHistoryItem(
+    className: String,
+    session: AttendanceSession,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+) {
     val present = session.entries.count { it.status == AttendanceStatus.PRESENT }
     val absent = session.entries.count { it.status == AttendanceStatus.ABSENT }
     Card(
@@ -1136,13 +1443,35 @@ private fun GlobalHistoryItem(className: String, session: AttendanceSession, onC
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Text("›", fontSize = 28.sp)
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Default.Delete, contentDescription = "删除记录")
+            }
         }
     }
 }
 
 @Composable
-private fun ResultEntryItem(entry: AttendanceEntry) {
+private fun DeleteHistoryDialog(
+    session: AttendanceSession,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("删除点名记录？") },
+        text = { Text("将删除 ${formatTime(session.createdAt)} 的点名结果，此操作无法撤销。") },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                Text("删除", modifier = Modifier.padding(start = 4.dp))
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun ResultEntryItem(entry: AttendanceEntry, iconOption: StatusIconOption) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
@@ -1164,13 +1493,13 @@ private fun ResultEntryItem(entry: AttendanceEntry) {
                     Text("原因：${entry.reason}", modifier = Modifier.padding(top = 5.dp))
                 }
             }
-            StatusBadge(entry.status)
+            StatusBadge(entry.status, iconOption)
         }
     }
 }
 
 @Composable
-private fun CompactResultItem(entry: AttendanceEntry) {
+private fun CompactResultItem(entry: AttendanceEntry, iconOption: StatusIconOption) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1184,13 +1513,13 @@ private fun CompactResultItem(entry: AttendanceEntry) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        StatusBadge(entry.status)
+        StatusBadge(entry.status, iconOption)
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 @Composable
-private fun StatusBadge(status: AttendanceStatus) {
+private fun StatusBadge(status: AttendanceStatus, iconOption: StatusIconOption) {
     val color = when (status) {
         AttendanceStatus.PRESENT -> MaterialTheme.colorScheme.primaryContainer
         AttendanceStatus.LATE -> Color(0xFFFFE0B2)
@@ -1199,17 +1528,29 @@ private fun StatusBadge(status: AttendanceStatus) {
         AttendanceStatus.UNMARKED -> MaterialTheme.colorScheme.surfaceVariant
     }
     Surface(color = color, shape = RoundedCornerShape(50)) {
-        Text(status.label, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
+        Row(
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(statusImageVector(iconOption), contentDescription = null, modifier = Modifier.size(16.dp))
+            Text(status.label, modifier = Modifier.padding(start = 4.dp))
+        }
     }
 }
 
 @Composable
-private fun SummaryCard(label: String, count: Int, modifier: Modifier = Modifier) {
+private fun SummaryCard(
+    label: String,
+    count: Int,
+    iconOption: StatusIconOption,
+    modifier: Modifier = Modifier,
+) {
     Card(modifier = modifier) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            Icon(statusImageVector(iconOption), contentDescription = null, modifier = Modifier.size(20.dp))
             Text(count.toString(), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Text(label, style = MaterialTheme.typography.labelMedium)
         }
@@ -1391,8 +1732,8 @@ private fun SimpleBackBar(title: String, onBack: () -> Unit) {
     TopAppBar(
         title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         navigationIcon = {
-            TextButton(onClick = onBack, contentPadding = PaddingValues(horizontal = 16.dp)) {
-                Text("‹", fontSize = 30.sp)
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
             }
         },
     )
@@ -1436,3 +1777,61 @@ private fun HintCard(text: String) {
 
 private fun formatTime(timestamp: Long): String =
     SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(timestamp))
+
+private fun formatFileTime(timestamp: Long): String =
+    SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date(timestamp))
+
+private fun statusImageVector(option: StatusIconOption): ImageVector = when (option) {
+    StatusIconOption.CHECK -> Icons.Default.CheckCircle
+    StatusIconOption.PERSON -> Icons.Default.Person
+    StatusIconOption.SCHEDULE -> Icons.Default.Schedule
+    StatusIconOption.EVENT_BUSY -> Icons.Default.EventBusy
+    StatusIconOption.CLOSE -> Icons.Default.Close
+    StatusIconOption.WARNING -> Icons.Default.Warning
+    StatusIconOption.STAR -> Icons.Default.Star
+    StatusIconOption.HELP -> Icons.Default.Help
+}
+
+private fun buildAttendanceExport(
+    group: ClassGroup,
+    session: AttendanceSession,
+    settings: AppSettings,
+): String = buildString {
+    if (settings.exportHeader) {
+        appendLine("${group.name} 点名结果")
+        appendLine(formatTime(session.createdAt))
+    }
+    if (settings.exportSummary) {
+        val counts = AttendanceStatus.entries.associateWith { status ->
+            session.entries.count { it.status == status }
+        }
+        if (isNotEmpty()) appendLine()
+        appendLine("共 ${session.entries.size} 人")
+        appendLine(
+            "到场 ${counts.getValue(AttendanceStatus.PRESENT)}，" +
+                "迟到 ${counts.getValue(AttendanceStatus.LATE)}，" +
+                "请假 ${counts.getValue(AttendanceStatus.LEAVE)}，" +
+                "缺勤 ${counts.getValue(AttendanceStatus.ABSENT)}",
+        )
+    }
+    val includedEntries = session.entries.filter {
+        settings.exportPresentStudents || it.status != AttendanceStatus.PRESENT
+    }
+    if (includedEntries.isNotEmpty()) {
+        if (isNotEmpty()) appendLine()
+        appendLine("人员明细")
+        includedEntries.forEach { entry ->
+            append("[${entry.status.label}] ")
+            if (settings.exportStudentNumber && entry.studentNumber.isNotBlank()) {
+                append("${entry.studentNumber} ")
+            }
+            append(entry.studentName)
+            if (settings.exportReason && entry.reason.isNotBlank()) {
+                append("（${entry.reason}）")
+            }
+            appendLine()
+        }
+    } else if (isEmpty()) {
+        append("无可导出的点名内容")
+    }
+}.trimEnd()
