@@ -302,6 +302,8 @@ fun AttendanceApp() {
                 RollCallScreen(
                     group = group,
                     settings = settings,
+                    initialEntries = repository.getRollCallDraft(group.id),
+                    onDraftChange = { repository.saveRollCallDraft(group.id, it) },
                     onBack = {
                         screen = if (current.backToClassDetail) {
                             Screen.ClassDetail(group.id)
@@ -945,24 +947,56 @@ private fun ClassDetailScreen(
 private fun RollCallScreen(
     group: ClassGroup,
     settings: AppSettings,
+    initialEntries: List<AttendanceEntry>,
+    onDraftChange: (List<AttendanceEntry>) -> Unit,
     onBack: () -> Unit,
     onFinish: (List<AttendanceEntry>) -> Unit,
 ) {
     val effectiveSettings = settings.forClass(group)
-    val marks = remember(group.id) { mutableStateMapOf<String, Mark>() }
+    val marks = remember(group.id) {
+        mutableStateMapOf<String, Mark>().apply {
+            val currentStudentIds = group.students.mapTo(mutableSetOf()) { it.id }
+            initialEntries.forEach { entry ->
+                if (entry.studentId in currentStudentIds && entry.status != AttendanceStatus.UNMARKED) {
+                    put(entry.studentId, Mark(entry.status, entry.reason))
+                }
+            }
+        }
+    }
     var editingStudent by remember { mutableStateOf<Student?>(null) }
     var showFinishDialog by remember { mutableStateOf(false) }
     val checked = group.students.count { marks[it.id]?.status != null }
 
+    fun updateMark(student: Student, mark: Mark?) {
+        if (mark == null) {
+            marks.remove(student.id)
+        } else {
+            marks[student.id] = mark
+        }
+        onDraftChange(
+            group.students.mapNotNull { currentStudent ->
+                marks[currentStudent.id]?.let { currentMark ->
+                    AttendanceEntry(
+                        studentId = currentStudent.id,
+                        studentName = currentStudent.name,
+                        studentNumber = currentStudent.studentNumber,
+                        status = currentMark.status,
+                        reason = currentMark.reason,
+                    )
+                }
+            },
+        )
+    }
+
     fun applyAction(student: Student, action: GestureAction) {
         when (action) {
             GestureAction.EDIT -> editingStudent = student
-            GestureAction.PRESENT -> marks[student.id] = Mark(AttendanceStatus.PRESENT)
-            GestureAction.LATE -> marks[student.id] = Mark(AttendanceStatus.LATE, effectiveSettings.defaultReason)
-            GestureAction.LEAVE -> marks[student.id] = Mark(AttendanceStatus.LEAVE, effectiveSettings.defaultReason)
-            GestureAction.ABSENT -> marks[student.id] = Mark(AttendanceStatus.ABSENT, effectiveSettings.defaultReason)
-            GestureAction.EXEMPT -> marks[student.id] = Mark(AttendanceStatus.EXEMPT)
-            GestureAction.CLEAR -> marks.remove(student.id)
+            GestureAction.PRESENT -> updateMark(student, Mark(AttendanceStatus.PRESENT))
+            GestureAction.LATE -> updateMark(student, Mark(AttendanceStatus.LATE, effectiveSettings.defaultReason))
+            GestureAction.LEAVE -> updateMark(student, Mark(AttendanceStatus.LEAVE, effectiveSettings.defaultReason))
+            GestureAction.ABSENT -> updateMark(student, Mark(AttendanceStatus.ABSENT, effectiveSettings.defaultReason))
+            GestureAction.EXEMPT -> updateMark(student, Mark(AttendanceStatus.EXEMPT))
+            GestureAction.CLEAR -> updateMark(student, null)
         }
     }
 
@@ -1037,11 +1071,16 @@ private fun RollCallScreen(
                     compact = effectiveSettings.compactRollCallRows,
                     onTogglePresent = {
                         if (mark?.status == effectiveSettings.defaultStatus) {
-                            marks.remove(student.id)
+                            updateMark(student, null)
                         } else {
-                            marks[student.id] = Mark(
-                                effectiveSettings.defaultStatus,
-                                effectiveSettings.defaultReason.takeIf { statusUsesReason(effectiveSettings.defaultStatus) }.orEmpty(),
+                            updateMark(
+                                student,
+                                Mark(
+                                    effectiveSettings.defaultStatus,
+                                    effectiveSettings.defaultReason.takeIf {
+                                        statusUsesReason(effectiveSettings.defaultStatus)
+                                    }.orEmpty(),
+                                ),
                             )
                         }
                     },
@@ -1067,7 +1106,7 @@ private fun RollCallScreen(
             defaultReason = effectiveSettings.defaultReason,
             onDismiss = { editingStudent = null },
             onConfirm = { mark ->
-                marks[student.id] = mark
+                updateMark(student, mark)
                 editingStudent = null
             },
         )

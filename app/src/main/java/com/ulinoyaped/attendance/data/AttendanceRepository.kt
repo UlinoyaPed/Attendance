@@ -20,6 +20,8 @@ class AttendanceRepository(context: Context) {
     private val _settings = MutableStateFlow(loadSettings())
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
+    private val rollCallDrafts = loadRollCallDrafts().toMutableMap()
+
     fun addClass(name: String) {
         val cleanName = name.trim()
         if (cleanName.isEmpty()) return
@@ -30,8 +32,10 @@ class AttendanceRepository(context: Context) {
     fun deleteClass(classId: String) {
         _classes.value = _classes.value.filterNot { it.id == classId }
         _sessions.value = _sessions.value.filterNot { it.classId == classId }
+        rollCallDrafts.remove(classId)
         saveClasses()
         saveSessions()
+        saveRollCallDrafts()
     }
 
     fun renameClass(classId: String, name: String) {
@@ -108,7 +112,21 @@ class AttendanceRepository(context: Context) {
         )
         _sessions.value = listOf(session) + _sessions.value
         saveSessions()
+        rollCallDrafts.remove(classId)
+        saveRollCallDrafts()
         return session.id
+    }
+
+    fun getRollCallDraft(classId: String): List<AttendanceEntry> =
+        rollCallDrafts[classId].orEmpty()
+
+    fun saveRollCallDraft(classId: String, entries: List<AttendanceEntry>) {
+        if (entries.isEmpty()) {
+            rollCallDrafts.remove(classId)
+        } else {
+            rollCallDrafts[classId] = entries
+        }
+        saveRollCallDrafts()
     }
 
     fun deleteSession(sessionId: String) {
@@ -249,6 +267,7 @@ class AttendanceRepository(context: Context) {
         .put("formatVersion", 1)
         .put("classes", JSONArray(preferences.getString(KEY_CLASSES, "[]")))
         .put("sessions", JSONArray(preferences.getString(KEY_SESSIONS, "[]")))
+        .put("rollCallDrafts", rollCallDraftsToJson())
         .put("settings", settingsToJson(_settings.value))
         .toString(2)
 
@@ -257,17 +276,22 @@ class AttendanceRepository(context: Context) {
         require(root.optInt("formatVersion", 1) == 1) { "不支持的备份版本" }
         val classesJson = root.getJSONArray("classes").toString()
         val sessionsJson = root.getJSONArray("sessions").toString()
+        val draftsJson = root.optJSONArray("rollCallDrafts")?.toString() ?: "[]"
         val settingsJson = root.getJSONObject("settings").toString()
         val restoredClasses = parseClasses(classesJson)
         val restoredSessions = parseSessions(sessionsJson)
+        val restoredDrafts = parseRollCallDrafts(draftsJson)
         val restoredSettings = parseSettings(settingsJson)
         preferences.edit()
             .putString(KEY_CLASSES, classesJson)
             .putString(KEY_SESSIONS, sessionsJson)
+            .putString(KEY_ROLL_CALL_DRAFTS, draftsJson)
             .putString(KEY_SETTINGS, settingsJson)
             .apply()
         _classes.value = restoredClasses
         _sessions.value = restoredSessions
+        rollCallDrafts.clear()
+        rollCallDrafts.putAll(restoredDrafts)
         _settings.value = restoredSettings
     }.isSuccess
 
@@ -316,26 +340,44 @@ class AttendanceRepository(context: Context) {
     private fun saveSessions() {
         val array = JSONArray()
         _sessions.value.forEach { session ->
-            val entries = JSONArray()
-            session.entries.forEach { entry ->
-                entries.put(
-                    JSONObject()
-                        .put("studentId", entry.studentId)
-                        .put("studentName", entry.studentName)
-                        .put("studentNumber", entry.studentNumber)
-                        .put("status", entry.status.name)
-                        .put("reason", entry.reason),
-                )
-            }
             array.put(
                 JSONObject()
                     .put("id", session.id)
                     .put("classId", session.classId)
                     .put("createdAt", session.createdAt)
-                    .put("entries", entries),
+                    .put("entries", attendanceEntriesToJson(session.entries)),
             )
         }
         preferences.edit().putString(KEY_SESSIONS, array.toString()).apply()
+    }
+
+    private fun saveRollCallDrafts() {
+        preferences.edit()
+            .putString(KEY_ROLL_CALL_DRAFTS, rollCallDraftsToJson().toString())
+            .apply()
+    }
+
+    private fun rollCallDraftsToJson(): JSONArray = JSONArray().apply {
+        rollCallDrafts.forEach { (classId, entries) ->
+            put(
+                JSONObject()
+                    .put("classId", classId)
+                    .put("entries", attendanceEntriesToJson(entries)),
+            )
+        }
+    }
+
+    private fun attendanceEntriesToJson(entries: List<AttendanceEntry>): JSONArray = JSONArray().apply {
+        entries.forEach { entry ->
+            put(
+                JSONObject()
+                    .put("studentId", entry.studentId)
+                    .put("studentName", entry.studentName)
+                    .put("studentNumber", entry.studentNumber)
+                    .put("status", entry.status.name)
+                    .put("reason", entry.reason),
+            )
+        }
     }
 
     private fun updateSettings(settings: AppSettings) {
@@ -426,23 +468,7 @@ class AttendanceRepository(context: Context) {
         return buildList {
             for (index in 0 until array.length()) {
                 val item = array.getJSONObject(index)
-                val entryArray = item.optJSONArray("entries") ?: JSONArray()
-                val entries = buildList {
-                    for (entryIndex in 0 until entryArray.length()) {
-                        val entry = entryArray.getJSONObject(entryIndex)
-                        add(
-                            AttendanceEntry(
-                                studentId = entry.getString("studentId"),
-                                studentName = entry.getString("studentName"),
-                                studentNumber = entry.optString("studentNumber"),
-                                status = runCatching {
-                                    AttendanceStatus.valueOf(entry.getString("status"))
-                                }.getOrDefault(AttendanceStatus.ABSENT),
-                                reason = entry.optString("reason"),
-                            ),
-                        )
-                    }
-                }
+                val entries = parseAttendanceEntries(item.optJSONArray("entries") ?: JSONArray())
                 add(
                     AttendanceSession(
                         id = item.getString("id"),
@@ -452,6 +478,40 @@ class AttendanceRepository(context: Context) {
                     ),
                 )
             }
+        }
+    }
+
+    private fun loadRollCallDrafts(): Map<String, List<AttendanceEntry>> = runCatching {
+        parseRollCallDrafts(preferences.getString(KEY_ROLL_CALL_DRAFTS, "[]").orEmpty())
+    }.getOrDefault(emptyMap())
+
+    private fun parseRollCallDrafts(raw: String): Map<String, List<AttendanceEntry>> {
+        val array = JSONArray(raw)
+        return buildMap {
+            for (index in 0 until array.length()) {
+                val item = array.getJSONObject(index)
+                put(
+                    item.getString("classId"),
+                    parseAttendanceEntries(item.optJSONArray("entries") ?: JSONArray()),
+                )
+            }
+        }
+    }
+
+    private fun parseAttendanceEntries(array: JSONArray): List<AttendanceEntry> = buildList {
+        for (index in 0 until array.length()) {
+            val entry = array.getJSONObject(index)
+            add(
+                AttendanceEntry(
+                    studentId = entry.getString("studentId"),
+                    studentName = entry.getString("studentName"),
+                    studentNumber = entry.optString("studentNumber"),
+                    status = runCatching {
+                        AttendanceStatus.valueOf(entry.getString("status"))
+                    }.getOrDefault(AttendanceStatus.ABSENT),
+                    reason = entry.optString("reason"),
+                ),
+            )
         }
     }
 
@@ -518,6 +578,7 @@ class AttendanceRepository(context: Context) {
     companion object {
         private const val KEY_CLASSES = "classes"
         private const val KEY_SESSIONS = "sessions"
+        private const val KEY_ROLL_CALL_DRAFTS = "roll_call_drafts"
         private const val KEY_SETTINGS = "settings"
 
         private fun newId(): String = UUID.randomUUID().toString()
