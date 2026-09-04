@@ -35,6 +35,24 @@ data class AttendanceSession(
     val entries: List<AttendanceEntry>,
 )
 
+enum class GestureAction(val label: String) {
+    EDIT("打开状态选择"),
+    PRESENT("标记到场"),
+    LATE("标记迟到"),
+    LEAVE("标记请假"),
+    ABSENT("标记缺勤"),
+    CLEAR("清除标记"),
+}
+
+data class AppSettings(
+    val absenceReasons: List<String> = listOf("病假", "事假", "公假", "早退", "其他"),
+    val defaultReason: String = "",
+    val defaultStatus: AttendanceStatus = AttendanceStatus.PRESENT,
+    val longPressAction: GestureAction = GestureAction.EDIT,
+    val swipeLeftAction: GestureAction = GestureAction.ABSENT,
+    val swipeRightAction: GestureAction = GestureAction.PRESENT,
+)
+
 data class ImportedStudent(
     val name: String,
     val studentNumber: String,

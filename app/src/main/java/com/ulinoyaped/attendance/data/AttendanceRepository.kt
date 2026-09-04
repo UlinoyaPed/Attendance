@@ -17,6 +17,9 @@ class AttendanceRepository(context: Context) {
     private val _sessions = MutableStateFlow(loadSessions())
     val sessions: StateFlow<List<AttendanceSession>> = _sessions.asStateFlow()
 
+    private val _settings = MutableStateFlow(loadSettings())
+    val settings: StateFlow<AppSettings> = _settings.asStateFlow()
+
     fun addClass(name: String) {
         val cleanName = name.trim()
         if (cleanName.isEmpty()) return
@@ -86,6 +89,43 @@ class AttendanceRepository(context: Context) {
         return session.id
     }
 
+    fun addAbsenceReason(reason: String) {
+        val cleanReason = reason.trim()
+        if (cleanReason.isEmpty() || _settings.value.absenceReasons.any { it == cleanReason }) return
+        updateSettings(_settings.value.copy(absenceReasons = _settings.value.absenceReasons + cleanReason))
+    }
+
+    fun removeAbsenceReason(reason: String) {
+        updateSettings(
+            _settings.value.copy(
+                absenceReasons = _settings.value.absenceReasons - reason,
+                defaultReason = _settings.value.defaultReason.takeUnless { it == reason }.orEmpty(),
+            ),
+        )
+    }
+
+    fun setDefaultReason(reason: String) {
+        if (reason.isEmpty() || reason in _settings.value.absenceReasons) {
+            updateSettings(_settings.value.copy(defaultReason = reason))
+        }
+    }
+
+    fun setDefaultStatus(status: AttendanceStatus) {
+        if (status != AttendanceStatus.UNMARKED) updateSettings(_settings.value.copy(defaultStatus = status))
+    }
+
+    fun setLongPressAction(action: GestureAction) {
+        updateSettings(_settings.value.copy(longPressAction = action))
+    }
+
+    fun setSwipeLeftAction(action: GestureAction) {
+        updateSettings(_settings.value.copy(swipeLeftAction = action))
+    }
+
+    fun setSwipeRightAction(action: GestureAction) {
+        updateSettings(_settings.value.copy(swipeRightAction = action))
+    }
+
     private fun updateClass(classId: String, transform: (ClassGroup) -> ClassGroup) {
         _classes.value = _classes.value.map { group ->
             if (group.id == classId) transform(group) else group
@@ -138,6 +178,19 @@ class AttendanceRepository(context: Context) {
             )
         }
         preferences.edit().putString(KEY_SESSIONS, array.toString()).apply()
+    }
+
+    private fun updateSettings(settings: AppSettings) {
+        _settings.value = settings
+        val reasons = JSONArray().apply { settings.absenceReasons.forEach { put(it) } }
+        val json = JSONObject()
+            .put("absenceReasons", reasons)
+            .put("defaultReason", settings.defaultReason)
+            .put("defaultStatus", settings.defaultStatus.name)
+            .put("longPressAction", settings.longPressAction.name)
+            .put("swipeLeftAction", settings.swipeLeftAction.name)
+            .put("swipeRightAction", settings.swipeRightAction.name)
+        preferences.edit().putString(KEY_SETTINGS, json.toString()).apply()
     }
 
     private fun loadClasses(): List<ClassGroup> = runCatching {
@@ -197,13 +250,41 @@ class AttendanceRepository(context: Context) {
         }
     }.getOrDefault(emptyList())
 
+    private fun loadSettings(): AppSettings = runCatching {
+        val defaults = AppSettings()
+        val raw = preferences.getString(KEY_SETTINGS, null) ?: return@runCatching defaults
+        val json = JSONObject(raw)
+        val reasonsArray = json.optJSONArray("absenceReasons")
+        val reasons = if (reasonsArray == null) {
+            defaults.absenceReasons
+        } else {
+            buildList {
+                for (index in 0 until reasonsArray.length()) {
+                    reasonsArray.optString(index).trim().takeIf(String::isNotEmpty)?.let(::add)
+                }
+            }
+        }
+        defaults.copy(
+            absenceReasons = reasons,
+            defaultReason = json.optString("defaultReason").takeIf { it in reasons }.orEmpty(),
+            defaultStatus = enumValueOrDefault(json.optString("defaultStatus"), defaults.defaultStatus),
+            longPressAction = enumValueOrDefault(json.optString("longPressAction"), defaults.longPressAction),
+            swipeLeftAction = enumValueOrDefault(json.optString("swipeLeftAction"), defaults.swipeLeftAction),
+            swipeRightAction = enumValueOrDefault(json.optString("swipeRightAction"), defaults.swipeRightAction),
+        )
+    }.getOrDefault(AppSettings())
+
     companion object {
         private const val KEY_CLASSES = "classes"
         private const val KEY_SESSIONS = "sessions"
+        private const val KEY_SETTINGS = "settings"
 
         private fun newId(): String = UUID.randomUUID().toString()
     }
 }
+
+private inline fun <reified T : Enum<T>> enumValueOrDefault(value: String, default: T): T =
+    runCatching { enumValueOf<T>(value) }.getOrDefault(default)
 
 fun parseStudentList(text: String): List<ImportedStudent> {
     val lines = text

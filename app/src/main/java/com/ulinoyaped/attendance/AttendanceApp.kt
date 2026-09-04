@@ -3,8 +3,10 @@ package com.ulinoyaped.attendance
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,11 +20,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -30,6 +34,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -37,9 +43,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -62,7 +71,9 @@ import com.ulinoyaped.attendance.data.AttendanceEntry
 import com.ulinoyaped.attendance.data.AttendanceRepository
 import com.ulinoyaped.attendance.data.AttendanceSession
 import com.ulinoyaped.attendance.data.AttendanceStatus
+import com.ulinoyaped.attendance.data.AppSettings
 import com.ulinoyaped.attendance.data.ClassGroup
+import com.ulinoyaped.attendance.data.GestureAction
 import com.ulinoyaped.attendance.data.Student
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -70,10 +81,16 @@ import java.util.Date
 import java.util.Locale
 
 private sealed interface Screen {
-    data object Classes : Screen
+    data class Root(val tab: RootTab) : Screen
     data class ClassDetail(val classId: String) : Screen
     data class RollCall(val classId: String) : Screen
-    data class Result(val classId: String, val sessionId: String) : Screen
+    data class Result(val classId: String, val sessionId: String, val backToHistory: Boolean = false) : Screen
+}
+
+private enum class RootTab(val label: String, val shortLabel: String) {
+    CLASSES("班级", "班"),
+    HISTORY("历史", "史"),
+    SETTINGS("设置", "设"),
 }
 
 private data class Mark(
@@ -81,31 +98,52 @@ private data class Mark(
     val reason: String = "",
 )
 
+private enum class SettingSelector {
+    DEFAULT_STATUS,
+    DEFAULT_REASON,
+    LONG_PRESS,
+    SWIPE_LEFT,
+    SWIPE_RIGHT,
+}
+
 @Composable
 fun AttendanceApp() {
     val context = LocalContext.current
     val repository = remember { AttendanceRepository(context.applicationContext) }
     val classes by repository.classes.collectAsStateWithLifecycle()
     val sessions by repository.sessions.collectAsStateWithLifecycle()
-    var screen: Screen by remember { mutableStateOf(Screen.Classes) }
+    val settings by repository.settings.collectAsStateWithLifecycle()
+    var screen: Screen by remember { mutableStateOf(Screen.Root(RootTab.CLASSES)) }
 
     when (val current = screen) {
-        Screen.Classes -> ClassesScreen(
+        is Screen.Root -> RootScreen(
+            selectedTab = current.tab,
             classes = classes,
+            sessions = sessions,
+            settings = settings,
+            onSelectTab = { screen = Screen.Root(it) },
             onAddClass = repository::addClass,
             onOpenClass = { screen = Screen.ClassDetail(it) },
             onDeleteClass = repository::deleteClass,
+            onOpenResult = { classId, sessionId -> screen = Screen.Result(classId, sessionId, true) },
+            onAddReason = repository::addAbsenceReason,
+            onRemoveReason = repository::removeAbsenceReason,
+            onSetDefaultReason = repository::setDefaultReason,
+            onSetDefaultStatus = repository::setDefaultStatus,
+            onSetLongPressAction = repository::setLongPressAction,
+            onSetSwipeLeftAction = repository::setSwipeLeftAction,
+            onSetSwipeRightAction = repository::setSwipeRightAction,
         )
 
         is Screen.ClassDetail -> {
             val group = classes.firstOrNull { it.id == current.classId }
             if (group == null) {
-                screen = Screen.Classes
+                screen = Screen.Root(RootTab.CLASSES)
             } else {
                 ClassDetailScreen(
                     group = group,
                     sessions = sessions.filter { it.classId == group.id },
-                    onBack = { screen = Screen.Classes },
+                    onBack = { screen = Screen.Root(RootTab.CLASSES) },
                     onAddStudent = { name, number -> repository.addStudent(group.id, name, number) },
                     onRemoveStudent = { repository.removeStudent(group.id, it) },
                     onImport = { repository.importStudents(group.id, it) },
@@ -118,10 +156,11 @@ fun AttendanceApp() {
         is Screen.RollCall -> {
             val group = classes.firstOrNull { it.id == current.classId }
             if (group == null) {
-                screen = Screen.Classes
+                screen = Screen.Root(RootTab.CLASSES)
             } else {
                 RollCallScreen(
                     group = group,
+                    settings = settings,
                     onBack = { screen = Screen.ClassDetail(group.id) },
                     onFinish = { entries ->
                         val sessionId = repository.saveSession(group.id, entries)
@@ -135,14 +174,84 @@ fun AttendanceApp() {
             val group = classes.firstOrNull { it.id == current.classId }
             val session = sessions.firstOrNull { it.id == current.sessionId }
             if (group == null || session == null) {
-                screen = Screen.Classes
+                screen = Screen.Root(RootTab.HISTORY)
             } else {
                 ResultScreen(
                     group = group,
                     session = session,
-                    onBack = { screen = Screen.ClassDetail(group.id) },
+                    onBack = {
+                        screen = if (current.backToHistory) {
+                            Screen.Root(RootTab.HISTORY)
+                        } else {
+                            Screen.ClassDetail(group.id)
+                        }
+                    },
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun RootScreen(
+    selectedTab: RootTab,
+    classes: List<ClassGroup>,
+    sessions: List<AttendanceSession>,
+    settings: AppSettings,
+    onSelectTab: (RootTab) -> Unit,
+    onAddClass: (String) -> Unit,
+    onOpenClass: (String) -> Unit,
+    onDeleteClass: (String) -> Unit,
+    onOpenResult: (String, String) -> Unit,
+    onAddReason: (String) -> Unit,
+    onRemoveReason: (String) -> Unit,
+    onSetDefaultReason: (String) -> Unit,
+    onSetDefaultStatus: (AttendanceStatus) -> Unit,
+    onSetLongPressAction: (GestureAction) -> Unit,
+    onSetSwipeLeftAction: (GestureAction) -> Unit,
+    onSetSwipeRightAction: (GestureAction) -> Unit,
+) {
+    val bottomBar: @Composable () -> Unit = {
+        RootNavigationBar(selectedTab = selectedTab, onSelectTab = onSelectTab)
+    }
+    when (selectedTab) {
+        RootTab.CLASSES -> ClassesScreen(
+            classes = classes,
+            onAddClass = onAddClass,
+            onOpenClass = onOpenClass,
+            onDeleteClass = onDeleteClass,
+            bottomBar = bottomBar,
+        )
+        RootTab.HISTORY -> HistoryScreen(
+            classes = classes,
+            sessions = sessions,
+            onOpenResult = onOpenResult,
+            bottomBar = bottomBar,
+        )
+        RootTab.SETTINGS -> SettingsScreen(
+            settings = settings,
+            onAddReason = onAddReason,
+            onRemoveReason = onRemoveReason,
+            onSetDefaultReason = onSetDefaultReason,
+            onSetDefaultStatus = onSetDefaultStatus,
+            onSetLongPressAction = onSetLongPressAction,
+            onSetSwipeLeftAction = onSetSwipeLeftAction,
+            onSetSwipeRightAction = onSetSwipeRightAction,
+            bottomBar = bottomBar,
+        )
+    }
+}
+
+@Composable
+private fun RootNavigationBar(selectedTab: RootTab, onSelectTab: (RootTab) -> Unit) {
+    NavigationBar {
+        RootTab.entries.forEach { tab ->
+            NavigationBarItem(
+                selected = selectedTab == tab,
+                onClick = { onSelectTab(tab) },
+                icon = { Text(tab.shortLabel, fontWeight = FontWeight.Bold) },
+                label = { Text(tab.label) },
+            )
         }
     }
 }
@@ -154,12 +263,14 @@ private fun ClassesScreen(
     onAddClass: (String) -> Unit,
     onOpenClass: (String) -> Unit,
     onDeleteClass: (String) -> Unit,
+    bottomBar: @Composable () -> Unit,
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
     var classToDelete by remember { mutableStateOf<ClassGroup?>(null) }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("我的班级") }) },
+        bottomBar = bottomBar,
         floatingActionButton = {
             FloatingActionButton(onClick = { showAddDialog = true }) {
                 Text("+", fontSize = 28.sp)
@@ -255,6 +366,8 @@ private fun ClassDetailScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var showAddStudent by remember { mutableStateOf(false) }
+    var showImportOptions by remember { mutableStateOf(false) }
+    var showTextImport by remember { mutableStateOf(false) }
     var studentToDelete by remember { mutableStateOf<Student?>(null) }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -301,11 +414,7 @@ private fun ClassDetailScreen(
                         modifier = Modifier.weight(1f),
                     ) { Text("手动添加") }
                     OutlinedButton(
-                        onClick = {
-                            importLauncher.launch(
-                                arrayOf("text/*", "text/csv", "application/csv", "application/vnd.ms-excel"),
-                            )
-                        },
+                        onClick = { showImportOptions = true },
                         modifier = Modifier.weight(1f),
                     ) { Text("导入名单") }
                 }
@@ -339,6 +448,45 @@ private fun ClassDetailScreen(
         )
     }
 
+    if (showImportOptions) {
+        AlertDialog(
+            onDismissRequest = { showImportOptions = false },
+            title = { Text("导入名单") },
+            text = { Text("可以选择 CSV/TXT 文件，也可以直接粘贴名单文本。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showImportOptions = false
+                        showTextImport = true
+                    },
+                ) { Text("粘贴文本") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showImportOptions = false
+                        importLauncher.launch(
+                            arrayOf("text/*", "text/csv", "application/csv", "application/vnd.ms-excel"),
+                        )
+                    },
+                ) { Text("选择文件") }
+            },
+        )
+    }
+
+    if (showTextImport) {
+        TextImportDialog(
+            onDismiss = { showTextImport = false },
+            onConfirm = { text ->
+                val count = onImport(text)
+                showTextImport = false
+                scope.launch {
+                    snackbarHostState.showSnackbar(if (count > 0) "已导入 $count 名学生" else "没有可导入的新学生")
+                }
+            },
+        )
+    }
+
     studentToDelete?.let { student ->
         AlertDialog(
             onDismissRequest = { studentToDelete = null },
@@ -363,6 +511,7 @@ private fun ClassDetailScreen(
 @Composable
 private fun RollCallScreen(
     group: ClassGroup,
+    settings: AppSettings,
     onBack: () -> Unit,
     onFinish: (List<AttendanceEntry>) -> Unit,
 ) {
@@ -371,9 +520,20 @@ private fun RollCallScreen(
     var showFinishDialog by remember { mutableStateOf(false) }
     val checked = group.students.count { marks[it.id]?.status != null }
 
+    fun applyAction(student: Student, action: GestureAction) {
+        when (action) {
+            GestureAction.EDIT -> editingStudent = student
+            GestureAction.PRESENT -> marks[student.id] = Mark(AttendanceStatus.PRESENT)
+            GestureAction.LATE -> marks[student.id] = Mark(AttendanceStatus.LATE, settings.defaultReason)
+            GestureAction.LEAVE -> marks[student.id] = Mark(AttendanceStatus.LEAVE, settings.defaultReason)
+            GestureAction.ABSENT -> marks[student.id] = Mark(AttendanceStatus.ABSENT, settings.defaultReason)
+            GestureAction.CLEAR -> marks.remove(student.id)
+        }
+    }
+
     fun finish() {
         val entries = group.students.map { student ->
-            val mark = marks[student.id] ?: Mark(AttendanceStatus.ABSENT)
+            val mark = marks[student.id] ?: Mark(AttendanceStatus.ABSENT, settings.defaultReason)
             AttendanceEntry(
                 studentId = student.id,
                 studentName = student.name,
@@ -410,7 +570,7 @@ private fun RollCallScreen(
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(
-                        "点按学生卡片标记到场；点“状态”可填写迟到、请假或缺勤原因。",
+                        "点按：${settings.defaultStatus.label} · 长按：${settings.longPressAction.label} · 左滑：${settings.swipeLeftAction.label} · 右滑：${settings.swipeRightAction.label}",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
                     )
@@ -422,12 +582,20 @@ private fun RollCallScreen(
                     student = student,
                     mark = mark,
                     onTogglePresent = {
-                        if (mark?.status == AttendanceStatus.PRESENT) {
+                        if (mark?.status == settings.defaultStatus) {
                             marks.remove(student.id)
                         } else {
-                            marks[student.id] = Mark(AttendanceStatus.PRESENT)
+                            marks[student.id] = Mark(
+                                settings.defaultStatus,
+                                settings.defaultReason.takeIf { settings.defaultStatus != AttendanceStatus.PRESENT }.orEmpty(),
+                            )
                         }
                     },
+                    onLongPress = { applyAction(student, settings.longPressAction) },
+                    onSwipeLeft = { applyAction(student, settings.swipeLeftAction) },
+                    onSwipeRight = { applyAction(student, settings.swipeRightAction) },
+                    swipeLeftLabel = settings.swipeLeftAction.label,
+                    swipeRightLabel = settings.swipeRightAction.label,
                     onEdit = { editingStudent = student },
                 )
             }
@@ -437,7 +605,12 @@ private fun RollCallScreen(
     editingStudent?.let { student ->
         StatusDialog(
             student = student,
-            initial = marks[student.id] ?: Mark(AttendanceStatus.PRESENT),
+            initial = marks[student.id] ?: Mark(
+                settings.defaultStatus,
+                settings.defaultReason.takeIf { settings.defaultStatus != AttendanceStatus.PRESENT }.orEmpty(),
+            ),
+            presetReasons = settings.absenceReasons,
+            defaultReason = settings.defaultReason,
             onDismiss = { editingStudent = null },
             onConfirm = { mark ->
                 marks[student.id] = mark
@@ -514,11 +687,298 @@ private fun ResultScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HistoryScreen(
+    classes: List<ClassGroup>,
+    sessions: List<AttendanceSession>,
+    onOpenResult: (String, String) -> Unit,
+    bottomBar: @Composable () -> Unit,
+) {
+    val classNames = classes.associate { it.id to it.name }
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("点名历史") }) },
+        bottomBar = bottomBar,
+    ) { padding ->
+        if (sessions.isEmpty()) {
+            EmptyState(
+                title = "还没有点名记录",
+                description = "完成一次点名后，结果会显示在这里",
+                modifier = Modifier.padding(padding),
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 24.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(sessions.sortedByDescending { it.createdAt }, key = { it.id }) { session ->
+                    GlobalHistoryItem(
+                        className = classNames[session.classId].orEmpty(),
+                        session = session,
+                        onClick = { onOpenResult(session.classId, session.id) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsScreen(
+    settings: AppSettings,
+    onAddReason: (String) -> Unit,
+    onRemoveReason: (String) -> Unit,
+    onSetDefaultReason: (String) -> Unit,
+    onSetDefaultStatus: (AttendanceStatus) -> Unit,
+    onSetLongPressAction: (GestureAction) -> Unit,
+    onSetSwipeLeftAction: (GestureAction) -> Unit,
+    onSetSwipeRightAction: (GestureAction) -> Unit,
+    bottomBar: @Composable () -> Unit,
+) {
+    var showAddReason by remember { mutableStateOf(false) }
+    var selector by remember { mutableStateOf<SettingSelector?>(null) }
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("设置") }) },
+        bottomBar = bottomBar,
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 28.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item { SectionTitle("点名操作") }
+            item {
+                SettingsGroup {
+                    SettingRow(
+                        title = "点按默认选择",
+                        value = settings.defaultStatus.label,
+                        onClick = { selector = SettingSelector.DEFAULT_STATUS },
+                    )
+                    HorizontalDivider()
+                    SettingRow(
+                        title = "默认未到原因",
+                        value = settings.defaultReason.ifBlank { "不预填" },
+                        onClick = { selector = SettingSelector.DEFAULT_REASON },
+                    )
+                    HorizontalDivider()
+                    SettingRow(
+                        title = "长按姓名",
+                        value = settings.longPressAction.label,
+                        onClick = { selector = SettingSelector.LONG_PRESS },
+                    )
+                    HorizontalDivider()
+                    SettingRow(
+                        title = "向左滑动",
+                        value = settings.swipeLeftAction.label,
+                        onClick = { selector = SettingSelector.SWIPE_LEFT },
+                    )
+                    HorizontalDivider()
+                    SettingRow(
+                        title = "向右滑动",
+                        value = settings.swipeRightAction.label,
+                        onClick = { selector = SettingSelector.SWIPE_RIGHT },
+                    )
+                }
+            }
+            item {
+                Text(
+                    "再次点按相同的默认状态会清除标记。滑动操作完成后卡片会自动回位。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            }
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SectionTitle("常用未到原因")
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { showAddReason = true }) { Text("添加") }
+                }
+            }
+            if (settings.absenceReasons.isEmpty()) {
+                item { HintCard("暂未设置常用原因。点名时仍可手动输入原因。") }
+            } else {
+                items(settings.absenceReasons, key = { it }) { reason ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(reason, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { onRemoveReason(reason) }) { Text("删除") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAddReason) {
+        TextInputDialog(
+            title = "添加常用原因",
+            label = "原因",
+            confirmText = "添加",
+            onDismiss = { showAddReason = false },
+            onConfirm = {
+                onAddReason(it)
+                showAddReason = false
+            },
+        )
+    }
+
+    selector?.let { selected ->
+        when (selected) {
+            SettingSelector.DEFAULT_STATUS -> StatusChoiceDialog(
+                title = "点按默认选择",
+                selected = settings.defaultStatus,
+                onDismiss = { selector = null },
+                onSelect = { onSetDefaultStatus(it); selector = null },
+            )
+            SettingSelector.DEFAULT_REASON -> ReasonChoiceDialog(
+                reasons = settings.absenceReasons,
+                selected = settings.defaultReason,
+                onDismiss = { selector = null },
+                onSelect = { onSetDefaultReason(it); selector = null },
+            )
+            SettingSelector.LONG_PRESS -> GestureChoiceDialog(
+                title = "长按姓名",
+                selected = settings.longPressAction,
+                onDismiss = { selector = null },
+                onSelect = { onSetLongPressAction(it); selector = null },
+            )
+            SettingSelector.SWIPE_LEFT -> GestureChoiceDialog(
+                title = "向左滑动",
+                selected = settings.swipeLeftAction,
+                onDismiss = { selector = null },
+                onSelect = { onSetSwipeLeftAction(it); selector = null },
+            )
+            SettingSelector.SWIPE_RIGHT -> GestureChoiceDialog(
+                title = "向右滑动",
+                selected = settings.swipeRightAction,
+                onDismiss = { selector = null },
+                onSelect = { onSetSwipeRightAction(it); selector = null },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsGroup(content: @Composable () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Column { content() }
+    }
+}
+
+@Composable
+private fun SettingRow(title: String, value: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(16.dp, 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+        Text(value, color = MaterialTheme.colorScheme.primary)
+        Text("  ›", fontSize = 22.sp)
+    }
+}
+
+@Composable
+private fun StatusChoiceDialog(
+    title: String,
+    selected: AttendanceStatus,
+    onDismiss: () -> Unit,
+    onSelect: (AttendanceStatus) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                AttendanceStatus.entries.filterNot { it == AttendanceStatus.UNMARKED }.forEach { status ->
+                    ChoiceRow(status.label, status == selected) { onSelect(status) }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun ReasonChoiceDialog(
+    reasons: List<String>,
+    selected: String,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("默认未到原因") },
+        text = {
+            Column {
+                ChoiceRow("不预填", selected.isEmpty()) { onSelect("") }
+                reasons.forEach { reason ->
+                    ChoiceRow(reason, reason == selected) { onSelect(reason) }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun GestureChoiceDialog(
+    title: String,
+    selected: GestureAction,
+    onDismiss: () -> Unit,
+    onSelect: (GestureAction) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                GestureAction.entries.forEach { action ->
+                    ChoiceRow(action.label, action == selected) { onSelect(action) }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun ChoiceRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Text(label)
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun RollCallItem(
     student: Student,
     mark: Mark?,
     onTogglePresent: () -> Unit,
+    onLongPress: () -> Unit,
+    onSwipeLeft: () -> Unit,
+    onSwipeRight: () -> Unit,
+    swipeLeftLabel: String,
+    swipeRightLabel: String,
     onEdit: () -> Unit,
 ) {
     val marked = mark != null
@@ -529,50 +989,76 @@ private fun RollCallItem(
         AttendanceStatus.ABSENT -> Color(0xFFFFDAD6)
         else -> MaterialTheme.colorScheme.surfaceContainerLow
     }
-    Card(
-        modifier = Modifier.fillMaxWidth().animateContentSize().clickable(onClick = onTogglePresent),
-        colors = CardDefaults.cardColors(containerColor = container),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(14.dp, 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .clip(CircleShape)
-                    .background(
-                        if (marked) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.surfaceVariant,
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    if (marked) "✓" else "",
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 20.sp,
-                )
+    val swipeState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { direction ->
+            when (direction) {
+                SwipeToDismissBoxValue.StartToEnd -> onSwipeRight()
+                SwipeToDismissBoxValue.EndToStart -> onSwipeLeft()
+                SwipeToDismissBoxValue.Settled -> Unit
             }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(student.name, style = MaterialTheme.typography.titleMedium)
-                val detail = listOfNotNull(
-                    student.studentNumber.takeIf(String::isNotBlank),
-                    mark?.status?.label,
-                    mark?.reason?.takeIf(String::isNotBlank),
-                ).joinToString(" · ")
-                if (detail.isNotEmpty()) {
+            false
+        },
+    )
+    SwipeToDismissBox(
+        state = swipeState,
+        backgroundContent = {
+            val direction = swipeState.dismissDirection
+            Box(
+                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.secondaryContainer).padding(horizontal = 20.dp),
+                contentAlignment = if (direction == SwipeToDismissBoxValue.StartToEnd) Alignment.CenterStart else Alignment.CenterEnd,
+            ) {
+                Text(if (direction == SwipeToDismissBoxValue.StartToEnd) swipeRightLabel else swipeLeftLabel)
+            }
+        },
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .animateContentSize()
+                .combinedClickable(onClick = onTogglePresent, onLongClick = onLongPress),
+            colors = CardDefaults.cardColors(containerColor = container),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(14.dp, 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (marked) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.surfaceVariant,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
                     Text(
-                        detail,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                        if (marked) "✓" else "",
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp,
                     )
                 }
+                Spacer(Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(student.name, style = MaterialTheme.typography.titleMedium)
+                    val detail = listOfNotNull(
+                        student.studentNumber.takeIf(String::isNotBlank),
+                        mark?.status?.label,
+                        mark?.reason?.takeIf(String::isNotBlank),
+                    ).joinToString(" · ")
+                    if (detail.isNotEmpty()) {
+                        Text(
+                            detail,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                TextButton(onClick = onEdit) { Text("状态") }
             }
-            TextButton(onClick = onEdit) { Text("状态") }
         }
     }
 }
@@ -620,6 +1106,32 @@ private fun HistoryItem(session: AttendanceSession, onClick: () -> Unit) {
                 Text(formatTime(session.createdAt), style = MaterialTheme.typography.titleSmall)
                 Text(
                     "共 ${session.entries.size} 人 · 缺勤 $absent · 请假 $leave · 迟到 $late",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text("›", fontSize = 28.sp)
+        }
+    }
+}
+
+@Composable
+private fun GlobalHistoryItem(className: String, session: AttendanceSession, onClick: () -> Unit) {
+    val present = session.entries.count { it.status == AttendanceStatus.PRESENT }
+    val absent = session.entries.count { it.status == AttendanceStatus.ABSENT }
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(className.ifBlank { "已删除的班级" }, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "${formatTime(session.createdAt)} · 到 $present · 缺勤 $absent",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -708,6 +1220,8 @@ private fun SummaryCard(label: String, count: Int, modifier: Modifier = Modifier
 private fun StatusDialog(
     student: Student,
     initial: Mark,
+    presetReasons: List<String>,
+    defaultReason: String,
     onDismiss: () -> Unit,
     onConfirm: (Mark) -> Unit,
 ) {
@@ -725,10 +1239,21 @@ private fun StatusDialog(
                     AttendanceStatus.ABSENT,
                 ).forEach { option ->
                     Row(
-                        modifier = Modifier.fillMaxWidth().clickable { status = option }.padding(vertical = 2.dp),
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            status = option
+                            if (option == AttendanceStatus.PRESENT) reason = ""
+                            else if (reason.isBlank()) reason = defaultReason
+                        }.padding(vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        RadioButton(selected = status == option, onClick = { status = option })
+                        RadioButton(
+                            selected = status == option,
+                            onClick = {
+                                status = option
+                                if (option == AttendanceStatus.PRESENT) reason = ""
+                                else if (reason.isBlank()) reason = defaultReason
+                            },
+                        )
                         Text(option.label)
                     }
                 }
@@ -739,6 +1264,19 @@ private fun StatusDialog(
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                     maxLines = 3,
                 )
+                if (status != AttendanceStatus.PRESENT && presetReasons.isNotEmpty()) {
+                    Text(
+                        "常用原因",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 10.dp),
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(presetReasons) { preset ->
+                            AssistChip(onClick = { reason = preset }, label = { Text(preset) })
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
@@ -779,6 +1317,41 @@ private fun AddStudentDialog(
         },
         confirmButton = {
             TextButton(enabled = name.isNotBlank(), onClick = { onConfirm(name, number) }) { Text("添加") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun TextImportDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    var value by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("粘贴名单") },
+        text = {
+            Column {
+                Text(
+                    "每行一人，可使用“学号,姓名”或“姓名,学号”两列格式。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { value = it },
+                    label = { Text("名单文本") },
+                    placeholder = { Text("学号,姓名\n20260001,张三\n20260002,李四") },
+                    minLines = 7,
+                    maxLines = 12,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = value.isNotBlank(), onClick = { onConfirm(value) }) { Text("导入") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
