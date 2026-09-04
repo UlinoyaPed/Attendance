@@ -968,6 +968,7 @@ private fun RollCallScreen(
     }
     var editingStudent by remember { mutableStateOf<Student?>(null) }
     var showFinishDialog by remember { mutableStateOf(false) }
+    var showClearDraftDialog by remember(group.id) { mutableStateOf(false) }
     val checked = group.students.count { marks[it.id]?.status != null }
 
     fun updateMark(student: Student, mark: Mark?) {
@@ -1018,7 +1019,24 @@ private fun RollCallScreen(
     }
 
     Scaffold(
-        topBar = { SimpleBackBar("${group.name} · 点名", onBack) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text("${group.name} · 点名", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    TextButton(
+                        onClick = { showClearDraftDialog = true },
+                        enabled = marks.isNotEmpty(),
+                    ) { Text("清空草稿") }
+                },
+            )
+        },
         bottomBar = {
             Surface(shadowElevation = 8.dp) {
                 Button(
@@ -1111,6 +1129,26 @@ private fun RollCallScreen(
             onConfirm = { mark ->
                 updateMark(student, mark)
                 editingStudent = null
+            },
+        )
+    }
+
+    if (showClearDraftDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearDraftDialog = false },
+            title = { Text("清空本班点名草稿？") },
+            text = { Text("将清除本班本次点名的全部状态和原因，所有学生恢复为未点。不会删除历史记录或其他班级的草稿，此操作无法撤销。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDraftChange(emptyList())
+                    marks.clear()
+                    editingStudent = null
+                    showFinishDialog = false
+                    showClearDraftDialog = false
+                }) { Text("清空草稿") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearDraftDialog = false }) { Text("取消") }
             },
         )
     }
