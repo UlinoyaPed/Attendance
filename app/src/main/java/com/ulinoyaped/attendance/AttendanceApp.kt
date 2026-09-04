@@ -2223,14 +2223,16 @@ private fun RollCallItem(
     Box(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
     ) {
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .background(MaterialTheme.colorScheme.secondaryContainer)
-                .padding(horizontal = 20.dp),
-            contentAlignment = if (horizontalOffset >= 0f) Alignment.CenterStart else Alignment.CenterEnd,
-        ) {
-            Text(if (horizontalOffset >= 0f) swipeRightLabel else swipeLeftLabel)
+        if (horizontalOffset != 0f) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                    .padding(horizontal = 20.dp),
+                contentAlignment = if (horizontalOffset > 0f) Alignment.CenterStart else Alignment.CenterEnd,
+            ) {
+                Text(if (horizontalOffset > 0f) swipeRightLabel else swipeLeftLabel)
+            }
         }
         Card(
             modifier = Modifier
