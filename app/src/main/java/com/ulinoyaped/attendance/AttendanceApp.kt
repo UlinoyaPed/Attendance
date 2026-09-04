@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Groups
@@ -58,6 +59,8 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LargeTopAppBar
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -74,6 +77,7 @@ import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -112,8 +116,18 @@ import java.util.Locale
 private sealed interface Screen {
     data class Root(val tab: RootTab) : Screen
     data class ClassDetail(val classId: String) : Screen
-    data class RollCall(val classId: String) : Screen
-    data class Result(val classId: String, val sessionId: String, val backToHistory: Boolean = false) : Screen
+    data class RollCall(val classId: String, val backToClassDetail: Boolean = false) : Screen
+    data class Result(
+        val classId: String,
+        val sessionId: String,
+        val backTarget: ResultBackTarget = ResultBackTarget.CLASS_DETAIL,
+    ) : Screen
+}
+
+private enum class ResultBackTarget {
+    CLASSES,
+    CLASS_DETAIL,
+    HISTORY,
 }
 
 private enum class RootTab(val label: String) {
@@ -152,11 +166,15 @@ fun AttendanceApp() {
         screen = when (val current = screen) {
             is Screen.Root -> Screen.Root(RootTab.CLASSES)
             is Screen.ClassDetail -> Screen.Root(RootTab.CLASSES)
-            is Screen.RollCall -> Screen.ClassDetail(current.classId)
-            is Screen.Result -> if (current.backToHistory) {
-                Screen.Root(RootTab.HISTORY)
-            } else {
+            is Screen.RollCall -> if (current.backToClassDetail) {
                 Screen.ClassDetail(current.classId)
+            } else {
+                Screen.Root(RootTab.CLASSES)
+            }
+            is Screen.Result -> when (current.backTarget) {
+                ResultBackTarget.CLASSES -> Screen.Root(RootTab.CLASSES)
+                ResultBackTarget.CLASS_DETAIL -> Screen.ClassDetail(current.classId)
+                ResultBackTarget.HISTORY -> Screen.Root(RootTab.HISTORY)
             }
         }
     }
@@ -169,9 +187,12 @@ fun AttendanceApp() {
             settings = settings,
             onSelectTab = { screen = Screen.Root(it) },
             onAddClass = repository::addClass,
-            onOpenClass = { screen = Screen.ClassDetail(it) },
+            onStartClass = { screen = Screen.RollCall(it) },
+            onEditClass = { screen = Screen.ClassDetail(it) },
             onDeleteClass = repository::deleteClass,
-            onOpenResult = { classId, sessionId -> screen = Screen.Result(classId, sessionId, true) },
+            onOpenResult = { classId, sessionId ->
+                screen = Screen.Result(classId, sessionId, ResultBackTarget.HISTORY)
+            },
             onDeleteSession = repository::deleteSession,
             onAddReason = repository::addAbsenceReason,
             onRemoveReason = repository::removeAbsenceReason,
@@ -200,7 +221,7 @@ fun AttendanceApp() {
                     onAddStudent = { name, number -> repository.addStudent(group.id, name, number) },
                     onRemoveStudent = { repository.removeStudent(group.id, it) },
                     onImport = { repository.importStudents(group.id, it) },
-                    onStart = { screen = Screen.RollCall(group.id) },
+                    onStart = { screen = Screen.RollCall(group.id, backToClassDetail = true) },
                     onOpenResult = { screen = Screen.Result(group.id, it) },
                     onDeleteSession = repository::deleteSession,
                 )
@@ -215,10 +236,21 @@ fun AttendanceApp() {
                 RollCallScreen(
                     group = group,
                     settings = settings,
-                    onBack = { screen = Screen.ClassDetail(group.id) },
+                    onBack = {
+                        screen = if (current.backToClassDetail) {
+                            Screen.ClassDetail(group.id)
+                        } else {
+                            Screen.Root(RootTab.CLASSES)
+                        }
+                    },
                     onFinish = { entries ->
                         val sessionId = repository.saveSession(group.id, entries)
-                        screen = Screen.Result(group.id, sessionId)
+                        val backTarget = if (current.backToClassDetail) {
+                            ResultBackTarget.CLASS_DETAIL
+                        } else {
+                            ResultBackTarget.CLASSES
+                        }
+                        screen = Screen.Result(group.id, sessionId, backTarget)
                     },
                 )
             }
@@ -235,10 +267,10 @@ fun AttendanceApp() {
                     session = session,
                     settings = settings,
                     onBack = {
-                        screen = if (current.backToHistory) {
-                            Screen.Root(RootTab.HISTORY)
-                        } else {
-                            Screen.ClassDetail(group.id)
+                        screen = when (current.backTarget) {
+                            ResultBackTarget.CLASSES -> Screen.Root(RootTab.CLASSES)
+                            ResultBackTarget.CLASS_DETAIL -> Screen.ClassDetail(group.id)
+                            ResultBackTarget.HISTORY -> Screen.Root(RootTab.HISTORY)
                         }
                     },
                 )
@@ -255,7 +287,8 @@ private fun RootScreen(
     settings: AppSettings,
     onSelectTab: (RootTab) -> Unit,
     onAddClass: (String) -> Unit,
-    onOpenClass: (String) -> Unit,
+    onStartClass: (String) -> Unit,
+    onEditClass: (String) -> Unit,
     onDeleteClass: (String) -> Unit,
     onOpenResult: (String, String) -> Unit,
     onDeleteSession: (String) -> Unit,
@@ -280,7 +313,8 @@ private fun RootScreen(
         RootTab.CLASSES -> ClassesScreen(
             classes = classes,
             onAddClass = onAddClass,
-            onOpenClass = onOpenClass,
+            onStartClass = onStartClass,
+            onEditClass = onEditClass,
             onDeleteClass = onDeleteClass,
             bottomBar = bottomBar,
         )
@@ -313,7 +347,10 @@ private fun RootScreen(
 
 @Composable
 private fun RootNavigationBar(selectedTab: RootTab, onSelectTab: (RootTab) -> Unit) {
-    NavigationBar {
+    NavigationBar(
+        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        tonalElevation = 0.dp,
+    ) {
         RootTab.entries.forEach { tab ->
             val icon = when (tab) {
                 RootTab.CLASSES -> Icons.Default.Groups
@@ -332,18 +369,32 @@ private fun RootNavigationBar(selectedTab: RootTab, onSelectTab: (RootTab) -> Un
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+private fun RootLargeTopBar(title: String) {
+    LargeTopAppBar(
+        title = { Text(title, fontWeight = FontWeight.SemiBold) },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = Color.Transparent,
+            scrolledContainerColor = Color.Transparent,
+        ),
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
 private fun ClassesScreen(
     classes: List<ClassGroup>,
     onAddClass: (String) -> Unit,
-    onOpenClass: (String) -> Unit,
+    onStartClass: (String) -> Unit,
+    onEditClass: (String) -> Unit,
     onDeleteClass: (String) -> Unit,
     bottomBar: @Composable () -> Unit,
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
+    var classToManage by remember { mutableStateOf<ClassGroup?>(null) }
     var classToDelete by remember { mutableStateOf<ClassGroup?>(null) }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("我的班级") }) },
+        topBar = { RootLargeTopBar("我的班级") },
         bottomBar = bottomBar,
         floatingActionButton = {
             FloatingActionButton(onClick = { showAddDialog = true }) {
@@ -360,35 +411,110 @@ private fun ClassesScreen(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 96.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 96.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                item {
+                    Text(
+                        "轻点班级立即开始点名，长按可编辑班级",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                    )
+                }
                 items(classes, key = { it.id }) { group ->
                     Card(
-                        onClick = { onOpenClass(group.id) },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .combinedClickable(
+                                onClick = { onStartClass(group.id) },
+                                onLongClick = { classToManage = group },
+                            ),
+                        shape = RoundedCornerShape(20.dp),
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                         ),
                     ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(18.dp, 12.dp, 8.dp, 12.dp),
+                            modifier = Modifier.fillMaxWidth().padding(14.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            Surface(
+                                modifier = Modifier.size(50.dp),
+                                shape = RoundedCornerShape(16.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.Groups,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.width(14.dp))
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(group.name, style = MaterialTheme.typography.titleMedium)
                                 Text(
-                                    "${group.students.size} 名学生",
+                                    group.name,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    "${group.students.size} 名学生 · 点击开始",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            TextButton(onClick = { classToDelete = group }) { Text("删除") }
+                            Surface(
+                                modifier = Modifier.size(40.dp),
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.primary,
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.PlayArrow,
+                                        contentDescription = "开始点名",
+                                        tint = MaterialTheme.colorScheme.onPrimary,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    classToManage?.let { group ->
+        AlertDialog(
+            onDismissRequest = { classToManage = null },
+            title = { Text(group.name) },
+            text = {
+                Column {
+                    ListItem(
+                        headlineContent = { Text("编辑班级") },
+                        supportingContent = { Text("管理名单、导入学生并查看班级历史") },
+                        leadingContent = { Icon(Icons.Default.Edit, contentDescription = null) },
+                        modifier = Modifier.clickable {
+                            classToManage = null
+                            onEditClass(group.id)
+                        },
+                    )
+                    ListItem(
+                        headlineContent = { Text("删除班级") },
+                        supportingContent = { Text("同时删除名单与全部点名历史") },
+                        leadingContent = { Icon(Icons.Default.Delete, contentDescription = null) },
+                        modifier = Modifier.clickable {
+                            classToManage = null
+                            classToDelete = group
+                        },
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { classToManage = null }) { Text("取消") }
+            },
+        )
     }
 
     if (showAddDialog) {
@@ -878,7 +1004,7 @@ private fun HistoryScreen(
     val classNames = classes.associate { it.id to it.name }
     var sessionToDelete by remember { mutableStateOf<AttendanceSession?>(null) }
     Scaffold(
-        topBar = { TopAppBar(title = { Text("点名历史") }) },
+        topBar = { RootLargeTopBar("点名历史") },
         bottomBar = bottomBar,
     ) { padding ->
         if (sessions.isEmpty()) {
@@ -938,7 +1064,7 @@ private fun SettingsScreen(
     var showAddReason by remember { mutableStateOf(false) }
     var selector by remember { mutableStateOf<SettingSelector?>(null) }
     Scaffold(
-        topBar = { TopAppBar(title = { Text("设置") }) },
+        topBar = { RootLargeTopBar("设置") },
         bottomBar = bottomBar,
     ) { padding ->
         LazyColumn(
