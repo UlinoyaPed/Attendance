@@ -449,7 +449,7 @@ class AttendanceRepository(context: Context) {
                 }
             }
         }
-        defaults.copy(
+        return defaults.copy(
             absenceReasons = reasons,
             defaultReason = json.optString("defaultReason").takeIf { it in reasons }.orEmpty(),
             defaultStatus = enumValueOrDefault(json.optString("defaultStatus"), defaults.defaultStatus),
