@@ -2309,6 +2309,8 @@ private fun RollCallItem(
             Box(
                 modifier = Modifier
                     .matchParentSize()
+                    // Fill behind the foreground's rounded corners before clipping labels.
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
                     .drawWithContent {
                         // Reveal only the strip vacated by the foreground card, including
                         // during the return animation. Never draw labels beneath its content.
@@ -2321,7 +2323,6 @@ private fun RollCallItem(
                             this@drawWithContent.drawContent()
                         }
                     }
-                    .background(MaterialTheme.colorScheme.secondaryContainer)
                     .padding(horizontal = 20.dp),
                 contentAlignment = if (horizontalOffset > 0f) Alignment.CenterStart else Alignment.CenterEnd,
             ) {
