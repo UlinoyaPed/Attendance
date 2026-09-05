@@ -93,6 +93,10 @@ enum class DisplayOption {
     COLLAPSE_LEAVE,
     COLLAPSE_ABSENT,
     COLLAPSE_EXEMPT,
+    EXPORT_LATE,
+    EXPORT_LEAVE,
+    EXPORT_ABSENT,
+    EXPORT_EXEMPT,
 }
 
 data class ClassAttendanceSettings(
@@ -157,6 +161,10 @@ data class AppSettings(
     val exportHeader: Boolean = true,
     val exportSummary: Boolean = true,
     val exportPresentStudents: Boolean = true,
+    val exportLateStudents: Boolean = true,
+    val exportLeaveStudents: Boolean = true,
+    val exportAbsentStudents: Boolean = true,
+    val exportExemptStudents: Boolean = true,
     val exportStudentNumber: Boolean = true,
     val exportReason: Boolean = true,
 )

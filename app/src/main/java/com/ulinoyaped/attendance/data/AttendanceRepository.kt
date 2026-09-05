@@ -267,6 +267,10 @@ class AttendanceRepository(context: Context) {
             DisplayOption.HISTORY_STATISTICS -> _settings.value.copy(showHistoryStatistics = enabled)
             DisplayOption.CONFIRM_INCOMPLETE -> _settings.value.copy(confirmIncompleteAttendance = enabled)
             DisplayOption.COMPACT_ROLL_CALL -> _settings.value.copy(compactRollCallRows = enabled)
+            DisplayOption.EXPORT_LATE -> _settings.value.copy(exportLateStudents = enabled)
+            DisplayOption.EXPORT_LEAVE -> _settings.value.copy(exportLeaveStudents = enabled)
+            DisplayOption.EXPORT_ABSENT -> _settings.value.copy(exportAbsentStudents = enabled)
+            DisplayOption.EXPORT_EXEMPT -> _settings.value.copy(exportExemptStudents = enabled)
             else -> return
         }
         updateSettings(updated)
@@ -431,6 +435,10 @@ class AttendanceRepository(context: Context) {
             .put("exportHeader", settings.exportHeader)
             .put("exportSummary", settings.exportSummary)
             .put("exportPresentStudents", settings.exportPresentStudents)
+            .put("exportLateStudents", settings.exportLateStudents)
+            .put("exportLeaveStudents", settings.exportLeaveStudents)
+            .put("exportAbsentStudents", settings.exportAbsentStudents)
+            .put("exportExemptStudents", settings.exportExemptStudents)
             .put("exportStudentNumber", settings.exportStudentNumber)
             .put("exportReason", settings.exportReason)
     }
@@ -581,6 +589,10 @@ class AttendanceRepository(context: Context) {
             exportHeader = json.optBoolean("exportHeader", defaults.exportHeader),
             exportSummary = json.optBoolean("exportSummary", defaults.exportSummary),
             exportPresentStudents = json.optBoolean("exportPresentStudents", defaults.exportPresentStudents),
+            exportLateStudents = json.optBoolean("exportLateStudents", defaults.exportLateStudents),
+            exportLeaveStudents = json.optBoolean("exportLeaveStudents", defaults.exportLeaveStudents),
+            exportAbsentStudents = json.optBoolean("exportAbsentStudents", defaults.exportAbsentStudents),
+            exportExemptStudents = json.optBoolean("exportExemptStudents", defaults.exportExemptStudents),
             exportStudentNumber = json.optBoolean("exportStudentNumber", defaults.exportStudentNumber),
             exportReason = json.optBoolean("exportReason", defaults.exportReason),
         )
