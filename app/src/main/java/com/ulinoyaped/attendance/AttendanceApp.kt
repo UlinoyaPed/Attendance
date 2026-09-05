@@ -70,8 +70,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material.icons.filled.ExpandMore
@@ -1461,11 +1460,8 @@ private fun SettingsScreen(
     onSetExportReason: (Boolean) -> Unit,
     bottomBar: @Composable () -> Unit,
 ) {
-    val categories = listOf("点名", "界面", "数据")
-    val pages = listOf(listOf("操作", "原因"), listOf("显示", "外观", "结果"), listOf("导出", "历史", "备份"))
-    var category by rememberSaveable { mutableStateOf(0) }
-    var subTab by rememberSaveable { mutableStateOf(0) }
-    val page = pages[category][subTab]
+    var page by rememberSaveable { mutableStateOf<String?>(null) }
+    BackHandler(enabled = page != null) { page = null }
     var showAddReason by remember { mutableStateOf(false) }
     var selector by remember { mutableStateOf<SettingSelector?>(null) }
     var showRestoreConfirmation by remember { mutableStateOf<String?>(null) }
@@ -1497,27 +1493,29 @@ private fun SettingsScreen(
         }
     }
     Scaffold(
-        topBar = { RootLargeTopBar("设置") },
+        topBar = {
+            if (page == null) RootLargeTopBar("设置")
+            else SimpleBackBar(
+                title = settingsDestinations.flatten().first { it.key == page }.title,
+                onBack = { page = null },
+            )
+        },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = bottomBar,
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            TabRow(selectedTabIndex = category) {
-                categories.forEachIndexed { index, label ->
-                    Tab(selected = category == index, onClick = { category = index; subTab = 0 }, text = { Text(label) })
-                }
-            }
-            TabRow(selectedTabIndex = subTab) {
-                pages[category].forEachIndexed { index, label ->
-                    Tab(selected = subTab == index, onClick = { subTab = index }, text = { Text(label) })
-                }
-            }
-            androidx.compose.runtime.key(category, subTab) {
+            androidx.compose.runtime.key(page) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 28.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    if (page == null) {
+                        items(settingsDestinations) { destinations ->
+                            SettingsDestinationGroup(destinations) { page = it }
+                            Spacer(Modifier.height(8.dp))
+                        }
+                    }
                     if (page == "操作") {
                         item { SectionTitle("点名操作") }
                         item {
@@ -2096,6 +2094,69 @@ private fun ClassSettingsScreen(
             ClassSettingSelector.SWIPE_RIGHT -> GestureChoiceDialog(
                 "向右滑动", draft.swipeRightAction, { selector = null },
             ) { draft = draft.copy(swipeRightAction = it); selector = null }
+        }
+    }
+}
+
+private data class SettingsDestination(
+    val key: String,
+    val title: String,
+    val subtitle: String,
+    val icon: ImageVector,
+)
+
+private val settingsDestinations = listOf(
+    listOf(
+        SettingsDestination("操作", "点名操作", "点按默认状态、长按与左右滑动", Icons.Default.Settings),
+        SettingsDestination("原因", "未到原因", "常用原因、默认选择与拖动排序", Icons.Default.EventBusy),
+    ),
+    listOf(
+        SettingsDestination("外观", "状态外观", "到场、请假等状态的图标与颜色", Icons.Default.Palette),
+        SettingsDestination("显示", "界面显示", "控件、文字、紧凑布局与默认折叠", Icons.Default.Person),
+        SettingsDestination("结果", "结果排列", "按状态分类或显示完整人员列表", Icons.Default.Groups),
+    ),
+    listOf(
+        SettingsDestination("导出", "文本导出", "分类明细、统计、学号与原因", Icons.Default.Save),
+        SettingsDestination("历史", "历史记录", "班级名称与点名时间标题", Icons.Default.History),
+        SettingsDestination("备份", "数据备份", "完整备份与恢复班级、历史和草稿", Icons.Default.FileUpload),
+    ),
+)
+
+@Composable
+private fun SettingsDestinationGroup(destinations: List<SettingsDestination>, onOpen: (String) -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.07f)
+            .compositeOver(MaterialTheme.colorScheme.surface),
+    ) {
+        Column {
+            destinations.forEachIndexed { index, destination ->
+                if (index > 0) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = 68.dp, end = 20.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable { onOpen(destination.key) }
+                        .padding(horizontal = 20.dp, vertical = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(destination.icon, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+                    Spacer(Modifier.width(24.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(destination.title, style = MaterialTheme.typography.titleMedium)
+                        Text(destination.subtitle, style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 5.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Icon(Icons.Default.ChevronRight, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                }
+            }
         }
     }
 }
