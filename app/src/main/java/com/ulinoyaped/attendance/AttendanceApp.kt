@@ -70,6 +70,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.ExpandLess
+import com.ulinoyaped.attendance.data.resultCollapseOptions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -589,6 +593,7 @@ private fun ClassesScreen(
                 Column {
                     ListItem(
                         headlineContent = { Text("编辑班级") },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         supportingContent = { Text("管理名单、导入学生并查看班级历史") },
                         leadingContent = { Icon(Icons.Default.Edit, contentDescription = null) },
                         modifier = Modifier.clickable {
@@ -598,6 +603,7 @@ private fun ClassesScreen(
                     )
                     ListItem(
                         headlineContent = { Text("删除班级") },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         supportingContent = { Text("同时删除名单与全部点名历史") },
                         leadingContent = { Icon(Icons.Default.Delete, contentDescription = null) },
                         modifier = Modifier.clickable {
@@ -1184,6 +1190,9 @@ private fun ResultScreen(
     val scope = rememberCoroutineScope()
     var showExportDialog by remember { mutableStateOf(false) }
     var entryToEdit by remember { mutableStateOf<AttendanceEntry?>(null) }
+    var collapsedStatuses by remember(session.id, effectiveSettings.collapsedResultStatuses) {
+        mutableStateOf(effectiveSettings.collapsedResultStatuses)
+    }
     val exportText = remember(group, session, effectiveSettings) {
         buildAttendanceExport(group, session, effectiveSettings)
     }
@@ -1263,9 +1272,26 @@ private fun ResultScreen(
                     val entries = session.entries.filter { it.status == status }
                     if (entries.isNotEmpty() || effectiveSettings.showEmptyResultGroups) {
                         item(key = "section-${status.name}") {
-                            SectionTitle("${status.label} · ${entries.size}")
+                            TextButton(
+                                onClick = {
+                                    collapsedStatuses = if (status in collapsedStatuses) {
+                                        collapsedStatuses - status
+                                    } else {
+                                        collapsedStatuses + status
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text("${status.label} · ${entries.size}", modifier = Modifier.weight(1f))
+                                Icon(
+                                    if (status in collapsedStatuses) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                                    contentDescription = if (status in collapsedStatuses) "展开" else "折叠",
+                                )
+                            }
                         }
-                        if (entries.isEmpty()) {
+                        if (status in collapsedStatuses) {
+                            // Keep the heading visible while hiding the category's rows.
+                        } else if (entries.isEmpty()) {
                             item(key = "empty-${status.name}") { HintCard("此分类暂无学生") }
                         } else {
                             items(entries, key = { "${status.name}-${it.studentId}" }) { entry ->
@@ -1564,6 +1590,13 @@ private fun SettingsScreen(
                                 "显示空结果分类",
                                 settings.showEmptyResultGroups,
                             ) { onSetDisplayOption(DisplayOption.EMPTY_RESULT_GROUPS, it) }
+                            resultCollapseOptions.forEach { (option, status) ->
+                                HorizontalDivider()
+                                SwitchSettingRow(
+                                    "默认折叠${status.label}列表",
+                                    status in settings.collapsedResultStatuses,
+                                ) { onSetDisplayOption(option, it) }
+                            }
                             HorizontalDivider()
                             SwitchSettingRow(
                                 "显示历史统计",
@@ -1973,6 +2006,15 @@ private fun ClassSettingsScreen(
                         HorizontalDivider()
                         SwitchSettingRow("显示空结果分类", draft.showEmptyResultGroups) {
                             draft = draft.copy(showEmptyResultGroups = it)
+                        }
+                        resultCollapseOptions.values.forEach { status ->
+                            HorizontalDivider()
+                            SwitchSettingRow("默认折叠${status.label}列表", status in draft.collapsedResultStatuses) { enabled ->
+                                draft = draft.copy(
+                                    collapsedResultStatuses = if (enabled) draft.collapsedResultStatuses + status
+                                        else draft.collapsedResultStatuses - status,
+                                )
+                            }
                         }
                     }
                 }

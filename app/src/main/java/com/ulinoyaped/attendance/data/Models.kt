@@ -88,9 +88,15 @@ enum class DisplayOption {
     HISTORY_STATISTICS,
     CONFIRM_INCOMPLETE,
     COMPACT_ROLL_CALL,
+    COLLAPSE_PRESENT,
+    COLLAPSE_LATE,
+    COLLAPSE_LEAVE,
+    COLLAPSE_ABSENT,
+    COLLAPSE_EXEMPT,
 }
 
 data class ClassAttendanceSettings(
+    val collapsedResultStatuses: Set<AttendanceStatus> = emptySet(),
     val defaultReason: String = "",
     val defaultStatus: AttendanceStatus = AttendanceStatus.PRESENT,
     val longPressAction: GestureAction = GestureAction.EDIT,
@@ -108,7 +114,16 @@ data class ClassAttendanceSettings(
     val compactRollCallRows: Boolean = false,
 )
 
+val resultCollapseOptions: Map<DisplayOption, AttendanceStatus> = linkedMapOf(
+    DisplayOption.COLLAPSE_PRESENT to AttendanceStatus.PRESENT,
+    DisplayOption.COLLAPSE_LATE to AttendanceStatus.LATE,
+    DisplayOption.COLLAPSE_LEAVE to AttendanceStatus.LEAVE,
+    DisplayOption.COLLAPSE_ABSENT to AttendanceStatus.ABSENT,
+    DisplayOption.COLLAPSE_EXEMPT to AttendanceStatus.EXEMPT,
+)
+
 data class AppSettings(
+    val collapsedResultStatuses: Set<AttendanceStatus> = emptySet(),
     val absenceReasons: List<String> = listOf("病假", "事假", "公假", "早退", "其他"),
     val defaultReason: String = "",
     val defaultStatus: AttendanceStatus = AttendanceStatus.PRESENT,
@@ -173,6 +188,7 @@ fun AppSettings.forClass(group: ClassGroup): AppSettings {
         swipeLeftAction = custom.swipeLeftAction,
         swipeRightAction = custom.swipeRightAction,
         groupResultsByStatus = custom.groupResultsByStatus,
+        collapsedResultStatuses = custom.collapsedResultStatuses,
         showStudentNumbers = custom.showStudentNumbers,
         showRollCallProgress = custom.showRollCallProgress,
         showOperationHint = custom.showOperationHint,
@@ -192,6 +208,7 @@ fun AppSettings.toClassSettings(): ClassAttendanceSettings = ClassAttendanceSett
     swipeLeftAction = swipeLeftAction,
     swipeRightAction = swipeRightAction,
     groupResultsByStatus = groupResultsByStatus,
+    collapsedResultStatuses = collapsedResultStatuses,
     showStudentNumbers = showStudentNumbers,
     showRollCallProgress = showRollCallProgress,
     showOperationHint = showOperationHint,

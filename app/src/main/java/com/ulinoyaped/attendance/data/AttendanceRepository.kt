@@ -246,6 +246,14 @@ class AttendanceRepository(context: Context) {
         updateSettings(_settings.value.copy(historyTitleMode = mode))
 
     fun setDisplayOption(option: DisplayOption, enabled: Boolean) {
+        val collapseStatus = resultCollapseOptions[option]
+        if (collapseStatus != null) {
+            val current = _settings.value.collapsedResultStatuses
+            updateSettings(_settings.value.copy(
+                collapsedResultStatuses = if (enabled) current + collapseStatus else current - collapseStatus,
+            ))
+            return
+        }
         val updated = when (option) {
             DisplayOption.STUDENT_NUMBERS -> _settings.value.copy(showStudentNumbers = enabled)
             DisplayOption.CLASS_STUDENT_COUNT -> _settings.value.copy(showClassStudentCount = enabled)
@@ -259,6 +267,7 @@ class AttendanceRepository(context: Context) {
             DisplayOption.HISTORY_STATISTICS -> _settings.value.copy(showHistoryStatistics = enabled)
             DisplayOption.CONFIRM_INCOMPLETE -> _settings.value.copy(confirmIncompleteAttendance = enabled)
             DisplayOption.COMPACT_ROLL_CALL -> _settings.value.copy(compactRollCallRows = enabled)
+            else -> return
         }
         updateSettings(updated)
     }
@@ -405,6 +414,7 @@ class AttendanceRepository(context: Context) {
             .put("absentColor", settings.absentColor.name)
             .put("exemptColor", settings.exemptColor.name)
             .put("groupResultsByStatus", settings.groupResultsByStatus)
+            .put("collapsedResultStatuses", JSONArray(settings.collapsedResultStatuses.map { it.name }))
             .put("historyTitleMode", settings.historyTitleMode.name)
             .put("showStudentNumbers", settings.showStudentNumbers)
             .put("showClassStudentCount", settings.showClassStudentCount)
@@ -551,6 +561,7 @@ class AttendanceRepository(context: Context) {
             absentColor = enumValueOrDefault(json.optString("absentColor"), defaults.absentColor),
             exemptColor = enumValueOrDefault(json.optString("exemptColor"), defaults.exemptColor),
             groupResultsByStatus = json.optBoolean("groupResultsByStatus", defaults.groupResultsByStatus),
+            collapsedResultStatuses = json.readCollapsedResultStatuses(),
             historyTitleMode = enumValueOrDefault(json.optString("historyTitleMode"), defaults.historyTitleMode),
             showStudentNumbers = json.optBoolean("showStudentNumbers", defaults.showStudentNumbers),
             showClassStudentCount = json.optBoolean("showClassStudentCount", defaults.showClassStudentCount),
@@ -588,6 +599,16 @@ class AttendanceRepository(context: Context) {
 private inline fun <reified T : Enum<T>> enumValueOrDefault(value: String, default: T): T =
     runCatching { enumValueOf<T>(value) }.getOrDefault(default)
 
+private fun JSONObject.readCollapsedResultStatuses(): Set<AttendanceStatus> {
+    val array = optJSONArray("collapsedResultStatuses") ?: return emptySet()
+    return buildSet {
+        for (index in 0 until array.length()) {
+            val status = runCatching { AttendanceStatus.valueOf(array.optString(index)) }.getOrNull()
+            if (status != null && status != AttendanceStatus.UNMARKED) add(status)
+        }
+    }
+}
+
 private fun ClassAttendanceSettings.toJson(): JSONObject = JSONObject()
     .put("defaultReason", defaultReason)
     .put("defaultStatus", defaultStatus.name)
@@ -595,6 +616,7 @@ private fun ClassAttendanceSettings.toJson(): JSONObject = JSONObject()
     .put("swipeLeftAction", swipeLeftAction.name)
     .put("swipeRightAction", swipeRightAction.name)
     .put("groupResultsByStatus", groupResultsByStatus)
+    .put("collapsedResultStatuses", JSONArray(collapsedResultStatuses.map { it.name }))
     .put("showStudentNumbers", showStudentNumbers)
     .put("showRollCallProgress", showRollCallProgress)
     .put("showOperationHint", showOperationHint)
@@ -614,6 +636,7 @@ private fun JSONObject.toClassAttendanceSettings(): ClassAttendanceSettings {
         swipeLeftAction = enumValueOrDefault(optString("swipeLeftAction"), defaults.swipeLeftAction),
         swipeRightAction = enumValueOrDefault(optString("swipeRightAction"), defaults.swipeRightAction),
         groupResultsByStatus = optBoolean("groupResultsByStatus", defaults.groupResultsByStatus),
+        collapsedResultStatuses = readCollapsedResultStatuses(),
         showStudentNumbers = optBoolean("showStudentNumbers", defaults.showStudentNumbers),
         showRollCallProgress = optBoolean("showRollCallProgress", defaults.showRollCallProgress),
         showOperationHint = optBoolean("showOperationHint", defaults.showOperationHint),
