@@ -7,10 +7,16 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.animation.core.animate
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -1461,6 +1467,7 @@ private fun SettingsScreen(
     bottomBar: @Composable () -> Unit,
 ) {
     var page by rememberSaveable { mutableStateOf<String?>(null) }
+    val pageStateHolder = rememberSaveableStateHolder()
     BackHandler(enabled = page != null) { page = null }
     var showAddReason by remember { mutableStateOf(false) }
     var selector by remember { mutableStateOf<SettingSelector?>(null) }
@@ -1504,313 +1511,335 @@ private fun SettingsScreen(
         bottomBar = bottomBar,
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            androidx.compose.runtime.key(page) {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 28.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    if (page == null) {
-                        items(settingsDestinations) { destinations ->
-                            SettingsDestinationGroup(destinations) { page = it }
-                            Spacer(Modifier.height(8.dp))
-                        }
-                    }
-                    if (page == "操作") {
-                        item { SectionTitle("点名操作") }
-                        item {
-                            SettingsGroup {
-                                SettingRow(
-                                    title = "点按默认选择",
-                                    value = settings.defaultStatus.label,
-                                    onClick = { selector = SettingSelector.DEFAULT_STATUS },
-                                )
-                                HorizontalDivider()
-                                SettingRow(
-                                    title = "长按姓名",
-                                    value = settings.longPressAction.label,
-                                    onClick = { selector = SettingSelector.LONG_PRESS },
-                                )
-                                HorizontalDivider()
-                                SettingRow(
-                                    title = "向左滑动",
-                                    value = settings.swipeLeftAction.label,
-                                    onClick = { selector = SettingSelector.SWIPE_LEFT },
-                                )
-                                HorizontalDivider()
-                                SettingRow(
-                                    title = "向右滑动",
-                                    value = settings.swipeRightAction.label,
-                                    onClick = { selector = SettingSelector.SWIPE_RIGHT },
-                                )
+            Crossfade(targetState = page, animationSpec = tween(180), label = "settingsPage") { displayedPage ->
+                pageStateHolder.SaveableStateProvider(displayedPage ?: "settingsHome") {
+                    val listState = rememberLazyListState()
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 28.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        if (displayedPage == null) {
+                            items(settingsDestinations) { destinations ->
+                                SettingsDestinationGroup(destinations) { page = it }
+                                Spacer(Modifier.height(8.dp))
                             }
                         }
-                        item {
-                            Text(
-                                "再次点按相同状态会清除标记。左右滑动需要明确的横向手势。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 4.dp),
-                            )
+                        if (displayedPage != null) {
+                            item {
+                                val destination = settingsDestinations.flatten().first { it.key == displayedPage }
+                                SettingsPageIntro(destination)
+                            }
                         }
-                    }
-                    if (page == "显示") {
-                        item { SectionTitle("界面显示") }
-                        item {
-                            SettingsGroup {
-                                SwitchSettingRow(
-                                    "显示班级人数",
-                                    settings.showClassStudentCount,
-                                ) { onSetDisplayOption(DisplayOption.CLASS_STUDENT_COUNT, it) }
-                                HorizontalDivider()
-                                SwitchSettingRow(
-                                    "显示班级页操作提示",
-                                    settings.showClassOperationHint,
-                                ) { onSetDisplayOption(DisplayOption.CLASS_OPERATION_HINT, it) }
-                                HorizontalDivider()
-                                SwitchSettingRow(
-                                    "显示学生学号",
-                                    settings.showStudentNumbers,
-                                ) { onSetDisplayOption(DisplayOption.STUDENT_NUMBERS, it) }
-                                HorizontalDivider()
-                                SwitchSettingRow(
-                                    "显示已处理进度",
-                                    settings.showRollCallProgress,
-                                ) { onSetDisplayOption(DisplayOption.ROLL_CALL_PROGRESS, it) }
-                                HorizontalDivider()
-                                SwitchSettingRow(
-                                    "显示点名操作提示",
-                                    settings.showOperationHint,
-                                ) { onSetDisplayOption(DisplayOption.OPERATION_HINT, it) }
-                                HorizontalDivider()
-                                SwitchSettingRow(
-                                    "显示状态按钮",
-                                    settings.showStatusButton,
-                                ) { onSetDisplayOption(DisplayOption.STATUS_BUTTON, it) }
-                                HorizontalDivider()
-                                SwitchSettingRow(
-                                    "名单中显示原因",
-                                    settings.showReasonsInRollCall,
-                                ) { onSetDisplayOption(DisplayOption.REASONS_IN_ROLL_CALL, it) }
-                                HorizontalDivider()
-                                SwitchSettingRow(
-                                    "紧凑点名列表",
-                                    settings.compactRollCallRows,
-                                ) { onSetDisplayOption(DisplayOption.COMPACT_ROLL_CALL, it) }
-                                HorizontalDivider()
-                                SwitchSettingRow(
-                                    "未点完时二次确认",
-                                    settings.confirmIncompleteAttendance,
-                                ) { onSetDisplayOption(DisplayOption.CONFIRM_INCOMPLETE, it) }
-                                HorizontalDivider()
-                                SwitchSettingRow(
-                                    "显示结果统计卡",
-                                    settings.showResultSummary,
-                                ) { onSetDisplayOption(DisplayOption.RESULT_SUMMARY, it) }
-                                HorizontalDivider()
-                                SwitchSettingRow(
-                                    "显示空结果分类",
-                                    settings.showEmptyResultGroups,
-                                ) { onSetDisplayOption(DisplayOption.EMPTY_RESULT_GROUPS, it) }
-                                resultCollapseOptions.forEach { (option, status) ->
-                                    HorizontalDivider()
-                                    SwitchSettingRow(
-                                        "默认折叠${status.label}列表",
-                                        status in settings.collapsedResultStatuses,
-                                    ) { onSetDisplayOption(option, it) }
+                        if (displayedPage == "操作") {
+                            item {
+                                SettingsGroup {
+                                    SettingRow(
+                                        title = "点按默认选择",
+                                        value = settings.defaultStatus.label,
+                                        onClick = { selector = SettingSelector.DEFAULT_STATUS },
+                                    )
+
+                                    SettingRow(
+                                        title = "长按姓名",
+                                        value = settings.longPressAction.label,
+                                        onClick = { selector = SettingSelector.LONG_PRESS },
+                                    )
+
+                                    SettingRow(
+                                        title = "向左滑动",
+                                        value = settings.swipeLeftAction.label,
+                                        onClick = { selector = SettingSelector.SWIPE_LEFT },
+                                    )
+
+                                    SettingRow(
+                                        title = "向右滑动",
+                                        value = settings.swipeRightAction.label,
+                                        onClick = { selector = SettingSelector.SWIPE_RIGHT },
+                                    )
                                 }
-                                HorizontalDivider()
-                                SwitchSettingRow(
-                                    "显示历史统计",
-                                    settings.showHistoryStatistics,
-                                ) { onSetDisplayOption(DisplayOption.HISTORY_STATISTICS, it) }
                             }
-                        }
-                    }
-                    if (page == "原因") {
-                        item { SectionTitle("未到原因") }
-                        item {
-                            SettingsGroup {
-                                SettingRow(
-                                    title = "默认未到原因",
-                                    value = settings.defaultReason.ifBlank { "不预填" },
-                                    onClick = { selector = SettingSelector.DEFAULT_REASON },
+                            item {
+                                Text(
+                                    "再次点按相同状态会清除标记。左右滑动需要明确的横向手势。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 4.dp),
                                 )
                             }
                         }
-                        item {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                SectionTitle("常用原因顺序")
-                                Spacer(Modifier.weight(1f))
-                                TextButton(onClick = { showAddReason = true }) { Text("添加") }
+                        if (displayedPage == "显示") {
+                            item {
+                                SettingsGroup(title = "班级首页", subtitle = "首页信息与操作引导") {
+                                    SwitchSettingRow(
+                                        "显示班级人数",
+                                        settings.showClassStudentCount,
+                                    ) { onSetDisplayOption(DisplayOption.CLASS_STUDENT_COUNT, it) }
+
+                                    SwitchSettingRow(
+                                        "显示班级页操作提示",
+                                        settings.showClassOperationHint,
+                                    ) { onSetDisplayOption(DisplayOption.CLASS_OPERATION_HINT, it) }
+
+                                }
+                            }
+                            item {
+                                SettingsGroup(title = "点名列表", subtitle = "名单信息、操作控件与行间距") {
+                                    SwitchSettingRow(
+                                        "显示学生学号",
+                                        settings.showStudentNumbers,
+                                    ) { onSetDisplayOption(DisplayOption.STUDENT_NUMBERS, it) }
+
+                                    SwitchSettingRow(
+                                        "显示已处理进度",
+                                        settings.showRollCallProgress,
+                                    ) { onSetDisplayOption(DisplayOption.ROLL_CALL_PROGRESS, it) }
+
+                                    SwitchSettingRow(
+                                        "显示点名操作提示",
+                                        settings.showOperationHint,
+                                    ) { onSetDisplayOption(DisplayOption.OPERATION_HINT, it) }
+
+                                    SwitchSettingRow(
+                                        "显示状态按钮",
+                                        settings.showStatusButton,
+                                    ) { onSetDisplayOption(DisplayOption.STATUS_BUTTON, it) }
+
+                                    SwitchSettingRow(
+                                        "名单中显示原因",
+                                        settings.showReasonsInRollCall,
+                                    ) { onSetDisplayOption(DisplayOption.REASONS_IN_ROLL_CALL, it) }
+
+                                    SwitchSettingRow(
+                                        "紧凑点名列表",
+                                        settings.compactRollCallRows,
+                                    ) { onSetDisplayOption(DisplayOption.COMPACT_ROLL_CALL, it) }
+
+                                    SwitchSettingRow(
+                                        "未点完时二次确认",
+                                        settings.confirmIncompleteAttendance,
+                                    ) { onSetDisplayOption(DisplayOption.CONFIRM_INCOMPLETE, it) }
+
+                                }
+                            }
+                            item {
+                                SettingsGroup(title = "结果与历史", subtitle = "统计信息与空分类显示") {
+                                    SwitchSettingRow(
+                                        "显示结果统计卡",
+                                        settings.showResultSummary,
+                                    ) { onSetDisplayOption(DisplayOption.RESULT_SUMMARY, it) }
+
+                                    SwitchSettingRow(
+                                        "显示空结果分类",
+                                        settings.showEmptyResultGroups,
+                                    ) { onSetDisplayOption(DisplayOption.EMPTY_RESULT_GROUPS, it) }
+                                    SwitchSettingRow(
+                                        "显示历史统计",
+                                        settings.showHistoryStatistics,
+                                    ) { onSetDisplayOption(DisplayOption.HISTORY_STATISTICS, it) }
+                                }
+                            }
+                            item {
+                                SettingsGroup(title = "分类折叠", subtitle = "进入结果页时默认收起指定分类，可手动展开") {
+                                    resultCollapseOptions.forEach { (option, status) ->
+
+                                        SwitchSettingRow(
+                                            "默认折叠${status.label}列表",
+                                            status in settings.collapsedResultStatuses,
+                                        ) { onSetDisplayOption(option, it) }
+                                    }
+
+                                }
                             }
                         }
-                        if (settings.absenceReasons.isEmpty()) {
-                            item { HintCard("暂未设置常用原因。点名时仍可手动输入原因。") }
-                        } else {
-                            itemsIndexed(settings.absenceReasons, key = { _, reason -> reason }) { index, reason ->
-                                val density = LocalDensity.current
-                                var accumulatedDrag by remember(reason) { mutableFloatStateOf(0f) }
-                                Card(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                                    ),
+                        if (displayedPage == "原因") {
+                            item {
+                                SettingsGroup {
+                                    SettingRow(
+                                        title = "默认未到原因",
+                                        value = settings.defaultReason.ifBlank { "不预填" },
+                                        onClick = { selector = SettingSelector.DEFAULT_REASON },
+                                    )
+                                }
+                            }
+                            item {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
+                                    SectionTitle("常用原因顺序")
+                                    Spacer(Modifier.weight(1f))
+                                    TextButton(onClick = { showAddReason = true }) { Text("添加") }
+                                }
+                            }
+                            if (settings.absenceReasons.isEmpty()) {
+                                item { HintCard("暂未设置常用原因。点名时仍可手动输入原因。") }
+                            } else {
+                                itemsIndexed(settings.absenceReasons, key = { _, reason -> reason }) { index, reason ->
+                                    val density = LocalDensity.current
+                                    var accumulatedDrag by remember(reason) { mutableFloatStateOf(0f) }
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                                        ),
                                     ) {
-                                        Icon(
-                                            Icons.Default.DragHandle,
-                                            contentDescription = "拖动排序",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier
-                                                .size(42.dp)
-                                                .padding(9.dp)
-                                                .pointerInput(reason, index) {
-                                                    detectDragGesturesAfterLongPress(
-                                                        onDragStart = { accumulatedDrag = 0f },
-                                                        onDragEnd = { accumulatedDrag = 0f },
-                                                        onDragCancel = { accumulatedDrag = 0f },
-                                                        onDrag = { change, dragAmount ->
-                                                            change.consume()
-                                                            accumulatedDrag += dragAmount.y
-                                                            val threshold = with(density) { 42.dp.toPx() }
-                                                            if (abs(accumulatedDrag) >= threshold) {
-                                                                val target = if (accumulatedDrag > 0) index + 1 else index - 1
-                                                                if (target in settings.absenceReasons.indices) {
-                                                                    onMoveReason(index, target)
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Icon(
+                                                Icons.Default.DragHandle,
+                                                contentDescription = "拖动排序",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier
+                                                    .size(42.dp)
+                                                    .padding(9.dp)
+                                                    .pointerInput(reason, index) {
+                                                        detectDragGesturesAfterLongPress(
+                                                            onDragStart = { accumulatedDrag = 0f },
+                                                            onDragEnd = { accumulatedDrag = 0f },
+                                                            onDragCancel = { accumulatedDrag = 0f },
+                                                            onDrag = { change, dragAmount ->
+                                                                change.consume()
+                                                                accumulatedDrag += dragAmount.y
+                                                                val threshold = with(density) { 42.dp.toPx() }
+                                                                if (abs(accumulatedDrag) >= threshold) {
+                                                                    val target = if (accumulatedDrag > 0) index + 1 else index - 1
+                                                                    if (target in settings.absenceReasons.indices) {
+                                                                        onMoveReason(index, target)
+                                                                    }
+                                                                    accumulatedDrag = 0f
                                                                 }
-                                                                accumulatedDrag = 0f
-                                                            }
-                                                        },
-                                                    )
-                                                },
-                                        )
-                                        Text(reason, modifier = Modifier.weight(1f))
-                                        IconButton(onClick = { onRemoveReason(reason) }) {
-                                            Icon(Icons.Default.Delete, contentDescription = "删除")
+                                                            },
+                                                        )
+                                                    },
+                                            )
+                                            Text(reason, modifier = Modifier.weight(1f))
+                                            IconButton(onClick = { onRemoveReason(reason) }) {
+                                                Icon(Icons.Default.Delete, contentDescription = "删除")
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
-                    }
-                    if (page == "外观") {
-                        item { SectionTitle("状态外观") }
-                        item {
-                            SettingsGroup {
-                                StatusAppearanceRow(
-                                    "到场", settings.presentIcon, settings.presentColor,
-                                    { selector = SettingSelector.ICON_PRESENT },
-                                    { selector = SettingSelector.COLOR_PRESENT },
-                                )
-                                HorizontalDivider()
-                                StatusAppearanceRow(
-                                    "迟到", settings.lateIcon, settings.lateColor,
-                                    { selector = SettingSelector.ICON_LATE },
-                                    { selector = SettingSelector.COLOR_LATE },
-                                )
-                                HorizontalDivider()
-                                StatusAppearanceRow(
-                                    "请假", settings.leaveIcon, settings.leaveColor,
-                                    { selector = SettingSelector.ICON_LEAVE },
-                                    { selector = SettingSelector.COLOR_LEAVE },
-                                )
-                                HorizontalDivider()
-                                StatusAppearanceRow(
-                                    "缺勤", settings.absentIcon, settings.absentColor,
-                                    { selector = SettingSelector.ICON_ABSENT },
-                                    { selector = SettingSelector.COLOR_ABSENT },
-                                )
-                                HorizontalDivider()
-                                StatusAppearanceRow(
-                                    "不参与", settings.exemptIcon, settings.exemptColor,
-                                    { selector = SettingSelector.ICON_EXEMPT },
-                                    { selector = SettingSelector.COLOR_EXEMPT },
+                        if (displayedPage == "外观") {
+                            item {
+                                SettingsGroup {
+                                    StatusAppearanceRow(
+                                        "到场", settings.presentIcon, settings.presentColor,
+                                        { selector = SettingSelector.ICON_PRESENT },
+                                        { selector = SettingSelector.COLOR_PRESENT },
+                                    )
+
+                                    StatusAppearanceRow(
+                                        "迟到", settings.lateIcon, settings.lateColor,
+                                        { selector = SettingSelector.ICON_LATE },
+                                        { selector = SettingSelector.COLOR_LATE },
+                                    )
+
+                                    StatusAppearanceRow(
+                                        "请假", settings.leaveIcon, settings.leaveColor,
+                                        { selector = SettingSelector.ICON_LEAVE },
+                                        { selector = SettingSelector.COLOR_LEAVE },
+                                    )
+
+                                    StatusAppearanceRow(
+                                        "缺勤", settings.absentIcon, settings.absentColor,
+                                        { selector = SettingSelector.ICON_ABSENT },
+                                        { selector = SettingSelector.COLOR_ABSENT },
+                                    )
+
+                                    StatusAppearanceRow(
+                                        "不参与", settings.exemptIcon, settings.exemptColor,
+                                        { selector = SettingSelector.ICON_EXEMPT },
+                                        { selector = SettingSelector.COLOR_EXEMPT },
+                                    )
+                                }
+                            }
+                        }
+                        if (displayedPage == "结果") {
+                            item {
+                                SettingsGroup {
+                                    SwitchSettingRow(
+                                        "按状态分类排列",
+                                        settings.groupResultsByStatus,
+                                        onSetGroupResultsByStatus,
+                                    )
+                                }
+                            }
+                        }
+                        if (displayedPage == "导出") {
+                            item {
+                                SettingsGroup(title = "抬头与统计", subtitle = "选择导出文本的概览信息") {
+                                    SwitchSettingRow("班级与点名时间", settings.exportHeader, onSetExportHeader)
+
+                                    SwitchSettingRow("到勤统计", settings.exportSummary, onSetExportSummary)
+
+                                }
+                            }
+                            item {
+                                SettingsGroup(title = "分类明细", subtitle = "选择包含哪些学生；不影响总人数统计") {
+                                    SwitchSettingRow("到场学生明细", settings.exportPresentStudents, onSetExportPresentStudents)
+
+                                    SwitchSettingRow("迟到学生明细", settings.exportLateStudents) { onSetDisplayOption(DisplayOption.EXPORT_LATE, it) }
+
+                                    SwitchSettingRow("请假学生明细", settings.exportLeaveStudents) { onSetDisplayOption(DisplayOption.EXPORT_LEAVE, it) }
+
+                                    SwitchSettingRow("缺勤学生明细", settings.exportAbsentStudents) { onSetDisplayOption(DisplayOption.EXPORT_ABSENT, it) }
+
+                                    SwitchSettingRow("不参与学生明细", settings.exportExemptStudents) { onSetDisplayOption(DisplayOption.EXPORT_EXEMPT, it) }
+
+                                }
+                            }
+                            item {
+                                SettingsGroup(title = "人员信息", subtitle = "自定义每名学生的导出字段") {
+                                    SwitchSettingRow("学生学号", settings.exportStudentNumber, onSetExportStudentNumber)
+
+                                    SwitchSettingRow("原因或备注", settings.exportReason, onSetExportReason)
+                                }
+                            }
+                        }
+                        if (displayedPage == "历史") {
+                            item {
+                                SettingsGroup {
+                                    SettingRow(
+                                        title = "记录标题",
+                                        value = settings.historyTitleMode.label,
+                                        onClick = { selector = SettingSelector.HISTORY_TITLE },
+                                    )
+                                }
+                            }
+                            item {
+                                Text(
+                                    "选择历史列表优先显示班级名称或点名时间。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 4.dp),
                                 )
                             }
                         }
-                    }
-                    if (page == "结果") {
-                        item { SectionTitle("结果排列") }
-                        item {
-                            SettingsGroup {
-                                SwitchSettingRow(
-                                    "按状态分类排列",
-                                    settings.groupResultsByStatus,
-                                    onSetGroupResultsByStatus,
-                                )
-                            }
-                        }
-                    }
-                    if (page == "导出") {
-                        item { SectionTitle("文本导出内容") }
-                        item {
-                            SettingsGroup {
-                                SwitchSettingRow("班级与点名时间", settings.exportHeader, onSetExportHeader)
-                                HorizontalDivider()
-                                SwitchSettingRow("到勤统计", settings.exportSummary, onSetExportSummary)
-                                HorizontalDivider()
-                                SwitchSettingRow("到场学生明细", settings.exportPresentStudents, onSetExportPresentStudents)
-                                HorizontalDivider()
-                                SwitchSettingRow("迟到学生明细", settings.exportLateStudents) { onSetDisplayOption(DisplayOption.EXPORT_LATE, it) }
-                                HorizontalDivider()
-                                SwitchSettingRow("请假学生明细", settings.exportLeaveStudents) { onSetDisplayOption(DisplayOption.EXPORT_LEAVE, it) }
-                                HorizontalDivider()
-                                SwitchSettingRow("缺勤学生明细", settings.exportAbsentStudents) { onSetDisplayOption(DisplayOption.EXPORT_ABSENT, it) }
-                                HorizontalDivider()
-                                SwitchSettingRow("不参与学生明细", settings.exportExemptStudents) { onSetDisplayOption(DisplayOption.EXPORT_EXEMPT, it) }
-                                HorizontalDivider()
-                                SwitchSettingRow("学生学号", settings.exportStudentNumber, onSetExportStudentNumber)
-                                HorizontalDivider()
-                                SwitchSettingRow("原因或备注", settings.exportReason, onSetExportReason)
-                            }
-                        }
-                    }
-                    if (page == "历史") {
-                        item { SectionTitle("历史记录") }
-                        item {
-                            SettingsGroup {
-                                SettingRow(
-                                    title = "记录标题",
-                                    value = settings.historyTitleMode.label,
-                                    onClick = { selector = SettingSelector.HISTORY_TITLE },
-                                )
-                            }
-                        }
-                        item {
-                            Text(
-                                "选择历史列表优先显示班级名称或点名时间。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 4.dp),
-                            )
-                        }
-                    }
-                    if (page == "备份") {
-                        item { SectionTitle("数据管理") }
-                        item {
-                            SettingsGroup {
-                                ActionSettingRow(
-                                    title = "导出完整备份",
-                                    subtitle = "保存班级、名单、历史记录和全部设置",
-                                    icon = Icons.Default.Save,
-                                    onClick = { backupExportLauncher.launch("attendance-backup.json") },
-                                )
-                                HorizontalDivider()
-                                ActionSettingRow(
-                                    title = "从备份恢复",
-                                    subtitle = "恢复 JSON 备份并覆盖当前全部数据",
-                                    icon = Icons.Default.FileUpload,
-                                    onClick = {
-                                        backupImportLauncher.launch(arrayOf("application/json", "text/json", "text/plain"))
-                                    },
-                                )
+                        if (displayedPage == "备份") {
+                            item {
+                                SettingsGroup {
+                                    ActionSettingRow(
+                                        title = "导出完整备份",
+                                        subtitle = "保存班级、名单、历史记录和全部设置",
+                                        icon = Icons.Default.Save,
+                                        onClick = { backupExportLauncher.launch("attendance-backup.json") },
+                                    )
+
+                                    ActionSettingRow(
+                                        title = "从备份恢复",
+                                        subtitle = "恢复 JSON 备份并覆盖当前全部数据",
+                                        icon = Icons.Default.FileUpload,
+                                        onClick = {
+                                            backupImportLauncher.launch(arrayOf("application/json", "text/json", "text/plain"))
+                                        },
+                                    )
+                                }
                             }
                         }
                     }
@@ -1987,19 +2016,19 @@ private fun ClassSettingsScreen(
                         SettingRow("点按默认选择", draft.defaultStatus.label) {
                             selector = ClassSettingSelector.DEFAULT_STATUS
                         }
-                        HorizontalDivider()
+
                         SettingRow("默认未到原因", draft.defaultReason.ifBlank { "不预填" }) {
                             selector = ClassSettingSelector.DEFAULT_REASON
                         }
-                        HorizontalDivider()
+
                         SettingRow("长按姓名", draft.longPressAction.label) {
                             selector = ClassSettingSelector.LONG_PRESS
                         }
-                        HorizontalDivider()
+
                         SettingRow("向左滑动", draft.swipeLeftAction.label) {
                             selector = ClassSettingSelector.SWIPE_LEFT
                         }
-                        HorizontalDivider()
+
                         SettingRow("向右滑动", draft.swipeRightAction.label) {
                             selector = ClassSettingSelector.SWIPE_RIGHT
                         }
@@ -2020,40 +2049,40 @@ private fun ClassSettingsScreen(
                         SwitchSettingRow("显示学生学号", draft.showStudentNumbers) {
                             draft = draft.copy(showStudentNumbers = it)
                         }
-                        HorizontalDivider()
+
                         SwitchSettingRow("显示已处理进度", draft.showRollCallProgress) {
                             draft = draft.copy(showRollCallProgress = it)
                         }
-                        HorizontalDivider()
+
                         SwitchSettingRow("显示点名操作提示", draft.showOperationHint) {
                             draft = draft.copy(showOperationHint = it)
                         }
-                        HorizontalDivider()
+
                         SwitchSettingRow("显示状态按钮", draft.showStatusButton) {
                             draft = draft.copy(showStatusButton = it)
                         }
-                        HorizontalDivider()
+
                         SwitchSettingRow("名单中显示原因", draft.showReasonsInRollCall) {
                             draft = draft.copy(showReasonsInRollCall = it)
                         }
-                        HorizontalDivider()
+
                         SwitchSettingRow("紧凑点名列表", draft.compactRollCallRows) {
                             draft = draft.copy(compactRollCallRows = it)
                         }
-                        HorizontalDivider()
+
                         SwitchSettingRow("未点完时二次确认", draft.confirmIncompleteAttendance) {
                             draft = draft.copy(confirmIncompleteAttendance = it)
                         }
-                        HorizontalDivider()
+
                         SwitchSettingRow("显示结果统计卡", draft.showResultSummary) {
                             draft = draft.copy(showResultSummary = it)
                         }
-                        HorizontalDivider()
+
                         SwitchSettingRow("显示空结果分类", draft.showEmptyResultGroups) {
                             draft = draft.copy(showEmptyResultGroups = it)
                         }
                         resultCollapseOptions.values.forEach { status ->
-                            HorizontalDivider()
+
                             SwitchSettingRow("默认折叠${status.label}列表", status in draft.collapsedResultStatuses) { enabled ->
                                 draft = draft.copy(
                                     collapsedResultStatuses = if (enabled) draft.collapsedResultStatuses + status
@@ -2162,13 +2191,94 @@ private fun SettingsDestinationGroup(destinations: List<SettingsDestination>, on
 }
 
 @Composable
-private fun SettingsGroup(content: @Composable () -> Unit) {
+private fun SettingsGroup(
+    title: String? = null,
+    subtitle: String? = null,
+    content: @Composable () -> Unit,
+) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.06f)
+            .compositeOver(MaterialTheme.colorScheme.surface),
     ) {
-        Column { content() }
+        Column(modifier = Modifier.animateContentSize(animationSpec = tween(180)).padding(vertical = 8.dp)) {
+            if (title != null) {
+                Text(title, color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp))
+            }
+            if (subtitle != null) {
+                Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 8.dp))
+            }
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SettingsPageIntro(destination: SettingsDestination) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.13f)
+            .compositeOver(MaterialTheme.colorScheme.surface),
+    ) {
+        Row(modifier = Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(destination.icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+            Column(modifier = Modifier.padding(start = 20.dp)) {
+                Text(destination.title, style = MaterialTheme.typography.titleMedium)
+                Text(destination.subtitle, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsRowIcon(title: String) {
+    val icon = when {
+        title.contains("折叠") -> Icons.Default.ExpandMore
+        title.contains("历史") || title.contains("时间") || title.contains("记录") -> Icons.Default.History
+        title.contains("原因") || title.contains("请假") -> Icons.Default.EventBusy
+        title.contains("迟到") -> Icons.Default.Schedule
+        title.contains("缺勤") -> Icons.Default.Close
+        title.contains("不参与") -> Icons.Default.RemoveCircle
+        title.contains("统计") || title.contains("进度") || title.contains("到场") -> Icons.Default.CheckCircle
+        title.contains("学号") || title.contains("名单") || title.contains("学生") -> Icons.Default.Person
+        title.contains("班级") -> Icons.Default.Groups
+        title.contains("提示") || title.contains("确认") -> Icons.Default.Help
+        else -> Icons.Default.Settings
+    }
+    Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+    Spacer(Modifier.width(18.dp))
+}
+
+private fun settingDescription(title: String): String? = when (title) {
+    "显示班级人数" -> "在首页班级卡片中显示名单人数"
+    "显示班级页操作提示" -> "显示点击点名、长按编辑的操作说明"
+    "显示学生学号" -> "在名单、点名和结果中显示学号"
+    "显示已处理进度" -> "显示已点人数与本班总人数"
+    "显示点名操作提示" -> "显示点按、长按和左右滑动对应的操作"
+    "显示状态按钮" -> "在姓名右侧提供状态选择入口"
+    "名单中显示原因" -> "在点名列表中显示已填写的原因或备注"
+    "紧凑点名列表" -> "缩小行间距，一屏显示更多学生"
+    "未点完时二次确认" -> "还有未点学生时，结束前再次确认"
+    "显示结果统计卡" -> "显示各状态的人数统计"
+    "显示空结果分类" -> "分类没有学生时仍显示分类标题"
+    "显示历史统计" -> "在历史列表中显示到场与缺勤等人数"
+    "按状态分类排列" -> "结果与导出按到场、请假等状态分组"
+    "班级与点名时间" -> "在导出文本开头显示班名与时间"
+    "到勤统计" -> "导出完整人数统计，独立于明细筛选"
+    "学生学号" -> "在导出的姓名前显示学号"
+    "原因或备注" -> "将填写的原因附在导出的姓名后"
+    "覆盖全局点名设置" -> "为当前班级单独保存操作与显示偏好"
+    else -> when {
+        title.startsWith("默认折叠") -> "进入结果页时收起此分类，点击标题可展开"
+        title.endsWith("学生明细") -> "在导出文本中包含此分类的学生名单"
+        else -> null
     }
 }
 
@@ -2178,9 +2288,13 @@ private fun SettingRow(title: String, value: String, onClick: () -> Unit) {
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(16.dp, 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-        Text(value, color = MaterialTheme.colorScheme.primary)
-        Text("  ›", fontSize = 22.sp)
+        SettingsRowIcon(title)
+        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text("当前：$value", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+        }
+        Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -2249,11 +2363,18 @@ private fun StatusAppearanceRow(
 @Composable
 private fun SwitchSettingRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().clickable { onCheckedChange(!checked) }.padding(16.dp, 8.dp),
+        modifier = Modifier.fillMaxWidth().toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange).padding(20.dp, 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        SettingsRowIcon(title)
+        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            settingDescription(title)?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+            }
+        }
+        Switch(checked = checked, onCheckedChange = null)
     }
 }
 
