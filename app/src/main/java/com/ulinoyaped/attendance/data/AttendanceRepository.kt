@@ -8,8 +8,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-class AttendanceRepository(context: Context) {
-    private val preferences = context.getSharedPreferences("attendance_data", Context.MODE_PRIVATE)
+class AttendanceRepository internal constructor(private val preferences: android.content.SharedPreferences) {
+
+    private val writer = java.util.concurrent.Executors.newSingleThreadExecutor { task ->
+        Thread(task, "attendance-writer").apply { isDaemon = true }
+    }
+    private val _storageError = MutableStateFlow<String?>(null)
+    val storageError: StateFlow<String?> = _storageError.asStateFlow()
+    @Volatile private var loadFailed = false
+    @Volatile private var lastConfirmedSnapshot = preferences.getString("verified_snapshot", null)
 
     private val _classes = MutableStateFlow(loadClasses())
     val classes: StateFlow<List<ClassGroup>> = _classes.asStateFlow()
@@ -21,6 +28,17 @@ class AttendanceRepository(context: Context) {
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
     private val rollCallDrafts = loadRollCallDrafts().toMutableMap()
+
+    init {
+        if (!loadFailed) runCatching {
+            val current = snapshot()
+            validateBackup(JSONObject(current))
+            if (lastConfirmedSnapshot == null) lastConfirmedSnapshot = current
+        }.onFailure {
+            loadFailed = true
+            _storageError.value = "本地数据校验失败，已停止保存。请导出原始数据并恢复备份。"
+        }
+    }
 
     fun addClass(name: String) {
         val cleanName = name.trim()
@@ -34,8 +52,6 @@ class AttendanceRepository(context: Context) {
         _sessions.value = _sessions.value.filterNot { it.classId == classId }
         rollCallDrafts.remove(classId)
         saveClasses()
-        saveSessions()
-        saveRollCallDrafts()
     }
 
     fun renameClass(classId: String, name: String) {
@@ -59,6 +75,10 @@ class AttendanceRepository(context: Context) {
     }
 
     fun removeStudent(classId: String, studentId: String) {
+        rollCallDrafts[classId]?.let { draft ->
+            val remaining = draft.filterNot { it.studentId == studentId }
+            if (remaining.isEmpty()) rollCallDrafts.remove(classId) else rollCallDrafts[classId] = remaining
+        }
         updateClass(classId) { group ->
             group.copy(students = group.students.filterNot { it.id == studentId })
         }
@@ -85,21 +105,18 @@ class AttendanceRepository(context: Context) {
         var addedCount = 0
         updateClass(classId) { group ->
             val result = group.students.toMutableList()
+            val keys = group.students.mapTo(mutableSetOf()) { studentKey(it.name, it.studentNumber) }
             imported.forEach { candidate ->
-                val duplicate = result.any { existing ->
-                    if (candidate.studentNumber.isNotBlank()) {
-                        existing.studentNumber.equals(candidate.studentNumber, ignoreCase = true)
-                    } else {
-                        existing.studentNumber.isBlank() && existing.name.equals(candidate.name, ignoreCase = true)
-                    }
-                }
+                val duplicate = !keys.add(studentKey(candidate.name, candidate.studentNumber))
                 if (!duplicate) {
                     result += Student(newId(), candidate.name, candidate.studentNumber)
                     addedCount++
                 }
             }
+            require(result.size <= MAX_STUDENTS) { "班级最多 $MAX_STUDENTS 人" }
             group.copy(students = result)
         }
+        check(awaitSaved()) { "名单未能保存，请先恢复设备数据" }
         return addedCount
     }
 
@@ -111,9 +128,8 @@ class AttendanceRepository(context: Context) {
             entries = entries,
         )
         _sessions.value = listOf(session) + _sessions.value
-        saveSessions()
         rollCallDrafts.remove(classId)
-        saveRollCallDrafts()
+        saveSessions()
         return session.id
     }
 
@@ -165,11 +181,9 @@ class AttendanceRepository(context: Context) {
     }
 
     fun removeAbsenceReason(reason: String) {
-        updateSettings(
-            _settings.value.copy(
-                absenceReasons = _settings.value.absenceReasons - reason,
-                defaultReason = _settings.value.defaultReason.takeUnless { it == reason }.orEmpty(),
-            ),
+        _settings.value = _settings.value.copy(
+            absenceReasons = _settings.value.absenceReasons - reason,
+            defaultReason = _settings.value.defaultReason.takeUnless { it == reason }.orEmpty(),
         )
         _classes.value = _classes.value.map { group ->
             group.copy(
@@ -276,16 +290,18 @@ class AttendanceRepository(context: Context) {
         updateSettings(updated)
     }
 
-    fun exportBackup(): String = JSONObject()
-        .put("formatVersion", 1)
-        .put("classes", JSONArray(preferences.getString(KEY_CLASSES, "[]")))
-        .put("sessions", JSONArray(preferences.getString(KEY_SESSIONS, "[]")))
-        .put("rollCallDrafts", rollCallDraftsToJson())
-        .put("settings", settingsToJson(_settings.value))
-        .toString(2)
+    fun exportBackup(): String = writer.submit<String> {
+        check(_storageError.value == null) { "数据保存失败，请先恢复" }
+        JSONObject(checkNotNull(lastConfirmedSnapshot)).toString(2)
+    }.get()
+
+    fun awaitSaved(): Boolean = writer.submit<Boolean> { _storageError.value == null }.get()
 
     fun importBackup(text: String): Boolean = runCatching {
+        require(text.length <= MAX_BACKUP_BYTES && text.toByteArray(Charsets.UTF_8).size <= MAX_BACKUP_BYTES) { "备份过大" }
+        requireShallowJson(text)
         val root = JSONObject(text)
+        validateBackup(root)
         require(root.optInt("formatVersion", 1) == 1) { "不支持的备份版本" }
         val classesJson = root.getJSONArray("classes").toString()
         val sessionsJson = root.getJSONArray("sessions").toString()
@@ -295,17 +311,18 @@ class AttendanceRepository(context: Context) {
         val restoredSessions = parseSessions(sessionsJson)
         val restoredDrafts = parseRollCallDrafts(draftsJson)
         val restoredSettings = parseSettings(settingsJson)
-        preferences.edit()
-            .putString(KEY_CLASSES, classesJson)
-            .putString(KEY_SESSIONS, sessionsJson)
-            .putString(KEY_ROLL_CALL_DRAFTS, draftsJson)
-            .putString(KEY_SETTINGS, settingsJson)
-            .apply()
+        val normalized = JSONObject().put("formatVersion", 1)
+            .put("classes", classesToJson(restoredClasses)).put("sessions", sessionsToJson(restoredSessions))
+            .put("rollCallDrafts", rollCallDraftsToJson(restoredDrafts)).put("settings", settingsToJson(restoredSettings))
+        val committed = writer.submit<Boolean> { commitSnapshot(normalized.toString()) }.get()
+        check(committed) { "备份写入失败，原数据已保留" }
         _classes.value = restoredClasses
         _sessions.value = restoredSessions
         rollCallDrafts.clear()
         rollCallDrafts.putAll(restoredDrafts)
         _settings.value = restoredSettings
+        loadFailed = false
+        _storageError.value = null
     }.isSuccess
 
     fun setExportHeader(enabled: Boolean) = updateSettings(_settings.value.copy(exportHeader = enabled))
@@ -327,9 +344,9 @@ class AttendanceRepository(context: Context) {
         saveClasses()
     }
 
-    private fun saveClasses() {
+    private fun classesToJson(groups: List<ClassGroup> = _classes.value): JSONArray {
         val array = JSONArray()
-        _classes.value.forEach { group ->
+        groups.forEach { group ->
             val students = JSONArray()
             group.students.forEach { student ->
                 students.put(
@@ -347,12 +364,12 @@ class AttendanceRepository(context: Context) {
                     .put("attendanceSettings", group.attendanceSettings?.toJson() ?: JSONObject.NULL),
             )
         }
-        preferences.edit().putString(KEY_CLASSES, array.toString()).apply()
+        return array
     }
 
-    private fun saveSessions() {
+    private fun sessionsToJson(sessions: List<AttendanceSession> = _sessions.value): JSONArray {
         val array = JSONArray()
-        _sessions.value.forEach { session ->
+        sessions.forEach { session ->
             array.put(
                 JSONObject()
                     .put("id", session.id)
@@ -361,17 +378,64 @@ class AttendanceRepository(context: Context) {
                     .put("entries", attendanceEntriesToJson(session.entries)),
             )
         }
-        preferences.edit().putString(KEY_SESSIONS, array.toString()).apply()
+        return array
     }
 
-    private fun saveRollCallDrafts() {
-        preferences.edit()
-            .putString(KEY_ROLL_CALL_DRAFTS, rollCallDraftsToJson().toString())
-            .apply()
+    private fun snapshot(
+        groups: List<ClassGroup> = _classes.value,
+        sessions: List<AttendanceSession> = _sessions.value,
+        drafts: Map<String, List<AttendanceEntry>> = rollCallDrafts,
+        settings: AppSettings = _settings.value,
+    ): String = JSONObject().put("formatVersion", 1)
+        .put("classes", classesToJson(groups)).put("sessions", sessionsToJson(sessions))
+        .put("rollCallDrafts", rollCallDraftsToJson(drafts)).put("settings", settingsToJson(settings)).toString()
+
+    private fun saveClasses() = persist()
+    private fun saveSessions() = persist()
+    private fun saveRollCallDrafts() = persist()
+
+    private fun persist() {
+        if (loadFailed || _storageError.value != null) return
+        val groups = _classes.value
+        val sessions = _sessions.value
+        val drafts = rollCallDrafts.toMap()
+        val settings = _settings.value
+        writer.execute {
+            if (_storageError.value == null && !runCatching {
+                commitSnapshot(snapshot(groups, sessions, drafts, settings))
+            }.getOrDefault(false)) {
+                loadFailed = true
+                _storageError.value = "数据未能写入设备。请恢复上次保存的数据后继续。"
+            }
+        }
     }
 
-    private fun rollCallDraftsToJson(): JSONArray = JSONArray().apply {
-        rollCallDrafts.forEach { (classId, entries) ->
+    private fun commitSnapshot(raw: String): Boolean = runCatching {
+        require(raw.length <= MAX_BACKUP_BYTES && raw.toByteArray(Charsets.UTF_8).size <= MAX_BACKUP_BYTES)
+        val root = JSONObject(raw)
+        validateBackup(root)
+        val previous = lastConfirmedSnapshot
+        val editor = preferences.edit()
+            .putString(KEY_CLASSES, root.getJSONArray("classes").toString())
+            .putString(KEY_SESSIONS, root.getJSONArray("sessions").toString())
+            .putString(KEY_ROLL_CALL_DRAFTS, root.optJSONArray("rollCallDrafts")?.toString() ?: "[]")
+            .putString(KEY_SETTINGS, root.getJSONObject("settings").toString())
+            .putString("verified_snapshot", raw)
+        if (previous != null) editor.putString("rollback_snapshot", previous)
+        editor.commit().also { if (it) lastConfirmedSnapshot = raw }
+    }.getOrDefault(false)
+
+    fun recoverPrevious(): Boolean {
+        return listOfNotNull(lastConfirmedSnapshot, preferences.getString("rollback_snapshot", null))
+            .distinct().any { importBackup(it) }
+    }
+
+    fun exportRecoveryData(): String = JSONObject().apply {
+        preferences.all.forEach { (key, value) -> put(key, value) }
+    }.toString(2)
+
+    private fun rollCallDraftsToJson(drafts: Map<String, List<AttendanceEntry>> = rollCallDrafts): JSONArray = JSONArray().apply {
+        drafts.forEach { (classId, entries) ->
             put(
                 JSONObject()
                     .put("classId", classId)
@@ -395,7 +459,7 @@ class AttendanceRepository(context: Context) {
 
     private fun updateSettings(settings: AppSettings) {
         _settings.value = settings
-        preferences.edit().putString(KEY_SETTINGS, settingsToJson(settings).toString()).apply()
+        persist()
     }
 
     private fun settingsToJson(settings: AppSettings): JSONObject {
@@ -445,7 +509,7 @@ class AttendanceRepository(context: Context) {
 
     private fun loadClasses(): List<ClassGroup> = runCatching {
         parseClasses(preferences.getString(KEY_CLASSES, "[]").orEmpty())
-    }.getOrDefault(emptyList())
+    }.onFailure { loadFailed = true; _storageError.value = "本地数据损坏，已停止自动保存。请导出原始数据或恢复备份。" }.getOrDefault(emptyList())
 
     private fun parseClasses(raw: String): List<ClassGroup> {
         val array = JSONArray(raw)
@@ -479,7 +543,7 @@ class AttendanceRepository(context: Context) {
 
     private fun loadSessions(): List<AttendanceSession> = runCatching {
         parseSessions(preferences.getString(KEY_SESSIONS, "[]").orEmpty())
-    }.getOrDefault(emptyList())
+    }.onFailure { loadFailed = true; _storageError.value = "本地数据损坏，已停止自动保存。请导出原始数据或恢复备份。" }.getOrDefault(emptyList())
 
     private fun parseSessions(raw: String): List<AttendanceSession> {
         val array = JSONArray(raw)
@@ -501,7 +565,7 @@ class AttendanceRepository(context: Context) {
 
     private fun loadRollCallDrafts(): Map<String, List<AttendanceEntry>> = runCatching {
         parseRollCallDrafts(preferences.getString(KEY_ROLL_CALL_DRAFTS, "[]").orEmpty())
-    }.getOrDefault(emptyMap())
+    }.onFailure { loadFailed = true; _storageError.value = "本地草稿损坏，已停止自动保存。" }.getOrDefault(emptyMap())
 
     private fun parseRollCallDrafts(raw: String): Map<String, List<AttendanceEntry>> {
         val array = JSONArray(raw)
@@ -524,9 +588,9 @@ class AttendanceRepository(context: Context) {
                     studentId = entry.getString("studentId"),
                     studentName = entry.getString("studentName"),
                     studentNumber = entry.optString("studentNumber"),
-                    status = runCatching {
-                        AttendanceStatus.valueOf(entry.getString("status"))
-                    }.getOrDefault(AttendanceStatus.ABSENT),
+                    status = AttendanceStatus.valueOf(entry.getString("status")).also {
+                        require(it != AttendanceStatus.UNMARKED) { "记录含无效点名状态" }
+                    },
                     reason = entry.optString("reason"),
                 ),
             )
@@ -535,7 +599,7 @@ class AttendanceRepository(context: Context) {
 
     private fun loadSettings(): AppSettings = runCatching {
         parseSettings(preferences.getString(KEY_SETTINGS, null))
-    }.getOrDefault(AppSettings())
+    }.onFailure { loadFailed = true; _storageError.value = "本地设置损坏，已停止自动保存。" }.getOrDefault(AppSettings())
 
     private fun parseSettings(raw: String?): AppSettings {
         val defaults = AppSettings()
@@ -551,8 +615,9 @@ class AttendanceRepository(context: Context) {
                 }
             }
         }
+        require(!json.has("defaultStatus") || json.getString("defaultStatus") in AttendanceStatus.entries.filter { it != AttendanceStatus.UNMARKED }.map { it.name })
         return defaults.copy(
-            absenceReasons = reasons,
+            absenceReasons = reasons.distinct(),
             defaultReason = json.optString("defaultReason").takeIf { it in reasons }.orEmpty(),
             defaultStatus = enumValueOrDefault(json.optString("defaultStatus"), defaults.defaultStatus),
             longPressAction = enumValueOrDefault(json.optString("longPressAction"), defaults.longPressAction),
@@ -599,6 +664,13 @@ class AttendanceRepository(context: Context) {
     }
 
     companion object {
+        @Volatile private var instance: AttendanceRepository? = null
+
+        fun getInstance(context: Context): AttendanceRepository = instance ?: synchronized(this) {
+            instance ?: AttendanceRepository(context.applicationContext.getSharedPreferences("attendance_data", Context.MODE_PRIVATE))
+                .also { instance = it }
+        }
+
         private const val KEY_CLASSES = "classes"
         private const val KEY_SESSIONS = "sessions"
         private const val KEY_ROLL_CALL_DRAFTS = "roll_call_drafts"
@@ -665,16 +737,12 @@ private fun JSONObject.toClassAttendanceSettings(): ClassAttendanceSettings {
 }
 
 fun parseStudentList(text: String): List<ImportedStudent> {
-    val lines = text
-        .removePrefix("\uFEFF")
-        .lineSequence()
-        .map(String::trim)
-        .filter(String::isNotEmpty)
-        .toList()
-    if (lines.isEmpty()) return emptyList()
-
-    val delimiter = listOf(',', '\t', ';').maxBy { candidate -> lines.first().count { it == candidate } }
-    val rows = lines.map { parseDelimitedLine(it, delimiter).map(String::trim) }
+    require(text.length <= MAX_ROSTER_BYTES && text.toByteArray(Charsets.UTF_8).size <= MAX_ROSTER_BYTES) { "名单过大" }
+    val raw = text.removePrefix("\uFEFF")
+    val firstLine = raw.lineSequence().firstOrNull().orEmpty()
+    val delimiter = listOf(',', '\t', ';').maxBy { candidate -> firstLine.count { it == candidate } }
+    val rows = parseRosterRecords(raw, delimiter)
+    if (rows.isEmpty()) return emptyList()
     val first = rows.first().map { it.lowercase() }
     val nameHeaders = setOf("姓名", "名字", "name", "student name", "学生姓名")
     val numberHeaders = setOf("学号", "student id", "studentid", "id", "编号")
@@ -695,35 +763,15 @@ fun parseStudentList(text: String): List<ImportedStudent> {
         } else {
             row[0] to row.getOrNull(1).orEmpty()
         }
-        name.trim().takeIf { it.isNotEmpty() }?.let { ImportedStudent(it, number.trim()) }
+        requireSafeField(name, "姓名")
+        requireSafeField(number, "学号", required = false)
+        ImportedStudent(name.trim(), number.trim())
     }
 }
 
 private fun String.looksLikeStudentNumber(): Boolean =
     isNotBlank() && all { it.isDigit() || it == '-' || it == '_' }
 
-private fun parseDelimitedLine(line: String, delimiter: Char): List<String> {
-    if (delimiter !in line) return listOf(line)
-    val result = mutableListOf<String>()
-    val field = StringBuilder()
-    var quoted = false
-    var index = 0
-    while (index < line.length) {
-        val character = line[index]
-        when {
-            character == '"' && quoted && line.getOrNull(index + 1) == '"' -> {
-                field.append('"')
-                index++
-            }
-            character == '"' -> quoted = !quoted
-            character == delimiter && !quoted -> {
-                result += field.toString()
-                field.clear()
-            }
-            else -> field.append(character)
-        }
-        index++
-    }
-    result += field.toString()
-    return result
-}
+private fun studentKey(name: String, number: String): String =
+    if (number.isNotBlank()) "number:" + number.trim().lowercase(java.util.Locale.ROOT)
+    else "name:" + name.trim().lowercase(java.util.Locale.ROOT)

@@ -7,7 +7,20 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.Crossfade
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.SizeTransform
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import android.os.PersistableBundle
+import com.ulinoyaped.attendance.data.readBoundedText
+import com.ulinoyaped.attendance.data.MAX_ROSTER_BYTES
+import com.ulinoyaped.attendance.data.MAX_BACKUP_BYTES
+import com.ulinoyaped.attendance.data.safeCsvCell
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -206,10 +219,16 @@ private enum class ClassSettingSelector {
 @Composable
 fun AttendanceApp() {
     val context = LocalContext.current
-    val repository = remember { AttendanceRepository(context.applicationContext) }
+    val repository = remember { AttendanceRepository.getInstance(context.applicationContext) }
+    val appScope = rememberCoroutineScope()
     val classes by repository.classes.collectAsStateWithLifecycle()
     val sessions by repository.sessions.collectAsStateWithLifecycle()
     val settings by repository.settings.collectAsStateWithLifecycle()
+    val storageError by repository.storageError.collectAsStateWithLifecycle()
+    if (storageError != null) {
+        StorageRecoveryScreen(repository, storageError.orEmpty())
+        return
+    }
     var screen: Screen by remember { mutableStateOf(Screen.Root(RootTab.CLASSES)) }
     val backTarget = screen
     BackHandler(enabled = backTarget !is Screen.Root || backTarget.tab != RootTab.CLASSES) {
@@ -333,7 +352,11 @@ fun AttendanceApp() {
                         } else {
                             ResultBackTarget.CLASSES
                         }
-                        screen = Screen.Result(group.id, sessionId, backTarget)
+                        appScope.launch {
+                            if (withContext(Dispatchers.IO) { repository.awaitSaved() }) {
+                                screen = Screen.Result(group.id, sessionId, backTarget)
+                            }
+                        }
                     },
                 )
             }
@@ -682,6 +705,8 @@ private fun ClassDetailScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var showAddStudent by remember { mutableStateOf(false) }
+    var importing by remember { mutableStateOf(false) }
+    if (importing) ImportProgressDialog()
     var showImportOptions by remember { mutableStateOf(false) }
     var showTextImport by remember { mutableStateOf(false) }
     var studentToDelete by remember { mutableStateOf<Student?>(null) }
@@ -692,17 +717,20 @@ private fun ClassDetailScreen(
     val rosterText = remember(group) { buildRosterExport(group) }
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            val result = runCatching {
-                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                    ?: error("无法读取文件")
-            }
+            importing = true
             scope.launch {
-                result.onSuccess { text ->
-                    val count = onImport(text)
-                    snackbarHostState.showSnackbar(if (count > 0) "已导入 $count 名学生" else "没有可导入的新学生")
-                }.onFailure {
-                    snackbarHostState.showSnackbar("名单读取失败")
+                val result = runCatching {
+                    withContext(Dispatchers.IO) {
+                        val text = context.contentResolver.openInputStream(uri)?.use { it.readBoundedText(MAX_ROSTER_BYTES) }
+                            ?: error("无法读取文件")
+                        onImport(text)
+                    }
                 }
+                importing = false
+                snackbarHostState.showSnackbar(result.fold(
+                    onSuccess = { "已导入 $it 名学生" },
+                    onFailure = { it.message ?: "名单导入失败" },
+                ))
             }
         }
     }
@@ -710,11 +738,15 @@ private fun ClassDetailScreen(
         ActivityResultContracts.CreateDocument("text/csv"),
     ) { uri ->
         if (uri != null) {
-            val saved = runCatching {
-                context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(rosterText) }
-                    ?: error("无法写入文件")
-            }.isSuccess
-            scope.launch { snackbarHostState.showSnackbar(if (saved) "名单已保存" else "名单保存失败") }
+            scope.launch {
+                val saved = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(rosterText) }
+                            ?: error("无法写入文件")
+                    }.isSuccess
+                }
+                snackbarHostState.showSnackbar(if (saved) "名单已保存" else "名单保存失败")
+            }
         }
     }
 
@@ -784,7 +816,7 @@ private fun ClassDetailScreen(
                     HintCard("支持 CSV/TXT；推荐表头为“学号,姓名”。重复学号会自动跳过。")
                 }
             } else {
-                items(group.students, key = { it.id }) { student ->
+                items(group.students, key = { "student-${it.id}" }) { student ->
                     StudentListItem(
                         student = student,
                         showStudentNumber = effectiveSettings.showStudentNumbers,
@@ -795,7 +827,7 @@ private fun ClassDetailScreen(
             }
             if (sessions.isNotEmpty()) {
                 item { SectionTitle("历史记录") }
-                items(sessions, key = { it.id }) { session ->
+                items(sessions, key = { "session-${it.id}" }) { session ->
                     HistoryItem(
                         session = session,
                         showStatistics = settings.showHistoryStatistics,
@@ -867,7 +899,7 @@ private fun ClassDetailScreen(
                 TextButton(
                     onClick = {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("${group.name}名单", rosterText))
+                        copySensitiveText(clipboard, "${group.name}名单", rosterText)
                         showRosterExport = false
                         scope.launch { snackbarHostState.showSnackbar("名单已复制") }
                     },
@@ -920,10 +952,15 @@ private fun ClassDetailScreen(
         TextImportDialog(
             onDismiss = { showTextImport = false },
             onConfirm = { text ->
-                val count = onImport(text)
                 showTextImport = false
+                importing = true
                 scope.launch {
-                    snackbarHostState.showSnackbar(if (count > 0) "已导入 $count 名学生" else "没有可导入的新学生")
+                    val result = runCatching { withContext(Dispatchers.IO) { onImport(text) } }
+                    importing = false
+                    snackbarHostState.showSnackbar(result.fold(
+                        onSuccess = { "已导入 $it 名学生" },
+                        onFailure = { it.message ?: "名单导入失败" },
+                    ))
                 }
             },
         )
@@ -983,6 +1020,7 @@ private fun RollCallScreen(
     var editingStudent by remember { mutableStateOf<Student?>(null) }
     var showFinishDialog by remember { mutableStateOf(false) }
     var showClearDraftDialog by remember(group.id) { mutableStateOf(false) }
+    var finishing by remember(group.id) { mutableStateOf(false) }
     val checked = group.students.count { marks[it.id]?.status != null }
 
     fun updateMark(student: Student, mark: Mark?) {
@@ -1019,6 +1057,8 @@ private fun RollCallScreen(
     }
 
     fun finish() {
+        if (finishing) return
+        finishing = true
         val entries = group.students.map { student ->
             val mark = marks[student.id] ?: Mark(AttendanceStatus.ABSENT, effectiveSettings.defaultReason)
             AttendanceEntry(
@@ -1065,7 +1105,8 @@ private fun RollCallScreen(
                         }
                     },
                     modifier = Modifier.fillMaxWidth().padding(16.dp).height(50.dp),
-                ) { Text("结束并查看结果") }
+                    enabled = !finishing,
+                ) { Text(if (finishing) "正在保存…" else "结束并查看结果") }
             }
         },
     ) { padding ->
@@ -1093,7 +1134,7 @@ private fun RollCallScreen(
                     }
                 }
             }
-            items(group.students, key = { it.id }) { student ->
+            items(group.students, key = { "student-${it.id}" }) { student ->
                 val mark = marks[student.id]
                 RollCallItem(
                     student = student,
@@ -1209,11 +1250,15 @@ private fun ResultScreen(
         ActivityResultContracts.CreateDocument("text/plain"),
     ) { uri ->
         if (uri != null) {
-            val saved = runCatching {
-                context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(exportText) }
-                    ?: error("无法写入文件")
-            }.isSuccess
-            scope.launch { snackbarHostState.showSnackbar(if (saved) "文本已保存" else "保存失败") }
+            scope.launch {
+                val saved = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(exportText) }
+                            ?: error("无法写入文件")
+                    }.isSuccess
+                }
+                snackbarHostState.showSnackbar(if (saved) "文本已保存" else "保存失败")
+            }
         }
     }
     val counts = AttendanceStatus.entries.associateWith { status ->
@@ -1348,7 +1393,7 @@ private fun ResultScreen(
                 TextButton(
                     onClick = {
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("点名结果", exportText))
+                        copySensitiveText(clipboard, "点名结果", exportText)
                         showExportDialog = false
                         scope.launch { snackbarHostState.showSnackbar("已复制到剪贴板") }
                     },
@@ -1471,6 +1516,8 @@ private fun SettingsScreen(
     BackHandler(enabled = page != null) { page = null }
     var showAddReason by remember { mutableStateOf(false) }
     var selector by remember { mutableStateOf<SettingSelector?>(null) }
+    var importing by remember { mutableStateOf(false) }
+    if (importing) ImportProgressDialog()
     var showRestoreConfirmation by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -1479,23 +1526,30 @@ private fun SettingsScreen(
         ActivityResultContracts.CreateDocument("application/json"),
     ) { uri ->
         if (uri != null) {
-            val saved = runCatching {
-                context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(onExportBackup()) }
-                    ?: error("无法写入文件")
-            }.isSuccess
-            scope.launch { snackbarHostState.showSnackbar(if (saved) "备份已保存" else "备份保存失败") }
+            scope.launch {
+                val saved = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(onExportBackup()) }
+                            ?: error("无法写入文件")
+                    }.isSuccess
+                }
+                snackbarHostState.showSnackbar(if (saved) "备份已保存" else "备份保存失败")
+            }
         }
     }
     val backupImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            val content = runCatching {
-                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                    ?: error("无法读取文件")
-            }.getOrNull()
-            if (content == null) {
-                scope.launch { snackbarHostState.showSnackbar("备份读取失败") }
-            } else {
-                showRestoreConfirmation = content
+            importing = true
+            scope.launch {
+                val result = runCatching {
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.use { it.readBoundedText(MAX_BACKUP_BYTES) }
+                            ?: error("无法读取文件")
+                    }
+                }
+                importing = false
+                result.onSuccess { showRestoreConfirmation = it }
+                    .onFailure { snackbarHostState.showSnackbar(it.message ?: "备份读取失败") }
             }
         }
     }
@@ -1511,7 +1565,16 @@ private fun SettingsScreen(
         bottomBar = bottomBar,
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            Crossfade(targetState = page, animationSpec = tween(180), label = "settingsPage") { displayedPage ->
+            AnimatedContent(
+                targetState = page,
+                transitionSpec = {
+                    val direction = if (targetState == null) -1 else 1
+                    ((slideInHorizontally(tween(160)) { direction * it / 12 } + fadeIn(tween(160)))
+                        togetherWith (slideOutHorizontally(tween(120)) { -direction * it / 12 } + fadeOut(tween(100))))
+                        .using(SizeTransform(sizeAnimationSpec = { _, _ -> tween(0) }))
+                },
+                label = "settingsPage",
+            ) { displayedPage ->
                 pageStateHolder.SaveableStateProvider(displayedPage ?: "settingsHome") {
                     val listState = rememberLazyListState()
                     LazyColumn(
@@ -1826,7 +1889,7 @@ private fun SettingsScreen(
                                 SettingsGroup {
                                     ActionSettingRow(
                                         title = "导出完整备份",
-                                        subtitle = "保存班级、名单、历史记录和全部设置",
+                                        subtitle = "未加密 JSON，包含学生信息，请保存到可信位置",
                                         icon = Icons.Default.Save,
                                         onClick = { backupExportLauncher.launch("attendance-backup.json") },
                                     )
@@ -1869,10 +1932,12 @@ private fun SettingsScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val restored = onImportBackup(backupText)
                         showRestoreConfirmation = null
+                        importing = true
                         scope.launch {
-                            snackbarHostState.showSnackbar(if (restored) "备份恢复完成" else "备份格式无效")
+                            val restored = withContext(Dispatchers.IO) { onImportBackup(backupText) }
+                            importing = false
+                            snackbarHostState.showSnackbar(if (restored) "备份恢复完成" else "备份无效或保存失败，未恢复")
                         }
                     },
                 ) { Text("恢复") }
@@ -2202,7 +2267,7 @@ private fun SettingsGroup(
         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.06f)
             .compositeOver(MaterialTheme.colorScheme.surface),
     ) {
-        Column(modifier = Modifier.animateContentSize(animationSpec = tween(180)).padding(vertical = 8.dp)) {
+        Column(modifier = Modifier.padding(vertical = 8.dp)) {
             if (title != null) {
                 Text(title, color = MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.titleSmall,
@@ -2993,7 +3058,7 @@ private fun StatusDialog(
                 if (statusUsesReason(status)) {
                     OutlinedTextField(
                         value = reason,
-                        onValueChange = { reason = it },
+                        onValueChange = { reason = it.take(240).filterNot { c -> c.isISOControl() || c == '\u2028' || c == '\u2029' } },
                         label = { Text("原因或备注（可选）") },
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                         maxLines = 3,
@@ -3039,14 +3104,14 @@ private fun AddStudentDialog(
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { name = it },
+                    onValueChange = { name = it.take(120).filterNot { c -> c.isISOControl() || c == '\u2028' || c == '\u2029' } },
                     label = { Text("姓名") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = number,
-                    onValueChange = { number = it },
+                    onValueChange = { number = it.take(120).filterNot { c -> c.isISOControl() || c == '\u2028' || c == '\u2029' } },
                     label = { Text("学号（可选）") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
@@ -3080,7 +3145,7 @@ private fun TextImportDialog(
                 )
                 OutlinedTextField(
                     value = value,
-                    onValueChange = { value = it },
+                    onValueChange = { if (it.length <= MAX_ROSTER_BYTES) value = it },
                     label = { Text("名单文本") },
                     placeholder = { Text("学号,姓名\n20260001,张三\n20260002,李四") },
                     minLines = 7,
@@ -3112,7 +3177,7 @@ private fun TextInputDialog(
         text = {
             OutlinedTextField(
                 value = value,
-                onValueChange = { value = it },
+                onValueChange = { value = it.take(120).filterNot { c -> c.isISOControl() || c == '\u2028' || c == '\u2029' } },
                 label = { Text(label) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
@@ -3224,10 +3289,67 @@ private fun buildRosterExport(group: ClassGroup): String = buildString {
     }
 }.trimEnd()
 
-private fun csvCell(value: String): String = if (value.any { it == ',' || it == '"' || it == '\n' }) {
-    "\"${value.replace("\"", "\"\"")}\""
-} else {
-    value
+private fun csvCell(value: String): String = safeCsvCell(value)
+
+private fun copySensitiveText(clipboard: ClipboardManager, label: String, text: String) {
+    val clip = ClipData.newPlainText(label, text)
+    clip.description.extras = PersistableBundle().apply {
+        putBoolean("android.content.extra.IS_SENSITIVE", true)
+    }
+    clipboard.setPrimaryClip(clip)
+}
+
+@Composable
+private fun ImportProgressDialog() {
+    AlertDialog(onDismissRequest = {}, title = { Text("正在处理数据") },
+        text = { Text("正在读取、校验并保存，请稍候。") }, confirmButton = {})
+}
+
+@Composable
+private fun StorageRecoveryScreen(repository: AttendanceRepository, message: String) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var result by remember { mutableStateOf("") }
+    val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) scope.launch {
+            val saved = withContext(Dispatchers.IO) { runCatching {
+                context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(repository.exportRecoveryData()) }
+                    ?: error("无法写入文件")
+            }.isSuccess }
+            result = if (saved) "原始数据已导出，请妥善保存" else "导出失败"
+        }
+    }
+    val restore = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            busy = true
+            val restored = withContext(Dispatchers.IO) { runCatching {
+                val text = context.contentResolver.openInputStream(uri)?.use { it.readBoundedText(MAX_BACKUP_BYTES) }
+                    ?: error("无法读取文件")
+                repository.importBackup(text)
+            }.getOrDefault(false) }
+            busy = false
+            result = if (restored) "已恢复" else "恢复失败，原始数据未清除"
+        }
+    }
+    Surface(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text("数据需要恢复", style = MaterialTheme.typography.headlineSmall)
+            Text(message)
+            Text("已暂停修改。建议先导出原始数据；恢复备份会替换当前数据。")
+            Button(onClick = { export.launch("attendance-recovery.json") }, enabled = !busy) { Text("导出原始数据") }
+            Button(onClick = {
+                scope.launch {
+                    busy = true
+                    val restored = withContext(Dispatchers.IO) { repository.recoverPrevious() }
+                    busy = false
+                    result = if (restored) "已恢复" else "没有可用副本，请选择备份文件"
+                }
+            }, enabled = !busy) { Text("恢复最近保存的数据") }
+            OutlinedButton(onClick = { restore.launch(arrayOf("application/json", "text/plain")) }, enabled = !busy) { Text("选择备份恢复") }
+            Text(if (busy) "正在恢复…" else result)
+        }
+    }
 }
 
 private fun buildAttendanceExport(
