@@ -139,6 +139,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.ulinoyaped.attendance.data.AttendanceEntry
 import com.ulinoyaped.attendance.data.AttendanceRepository
 import com.ulinoyaped.attendance.data.AttendanceSession
+import com.ulinoyaped.attendance.data.RollCallDraft
 import com.ulinoyaped.attendance.data.AttendanceStatus
 import com.ulinoyaped.attendance.data.AppSettings
 import com.ulinoyaped.attendance.data.ClassGroup
@@ -164,7 +165,13 @@ private sealed interface Screen {
     data class Root(val tab: RootTab) : Screen
     data class ClassDetail(val classId: String) : Screen
     data class ClassSettings(val classId: String) : Screen
-    data class RollCall(val classId: String, val backToClassDetail: Boolean = false) : Screen
+    data class Situations(val classId: String) : Screen
+    data class RollCall(
+        val classId: String,
+        val draftId: String,
+        val createdAt: Long,
+        val backTarget: ResultBackTarget = ResultBackTarget.CLASSES,
+    ) : Screen
     data class Result(
         val classId: String,
         val sessionId: String,
@@ -223,6 +230,7 @@ fun AttendanceApp() {
     val appScope = rememberCoroutineScope()
     val classes by repository.classes.collectAsStateWithLifecycle()
     val sessions by repository.sessions.collectAsStateWithLifecycle()
+    val drafts by repository.drafts.collectAsStateWithLifecycle()
     val settings by repository.settings.collectAsStateWithLifecycle()
     val storageError by repository.storageError.collectAsStateWithLifecycle()
     if (storageError != null) {
@@ -236,10 +244,11 @@ fun AttendanceApp() {
             is Screen.Root -> Screen.Root(RootTab.CLASSES)
             is Screen.ClassDetail -> Screen.Root(RootTab.CLASSES)
             is Screen.ClassSettings -> Screen.ClassDetail(current.classId)
-            is Screen.RollCall -> if (current.backToClassDetail) {
-                Screen.ClassDetail(current.classId)
-            } else {
-                Screen.Root(RootTab.CLASSES)
+            is Screen.Situations -> Screen.ClassDetail(current.classId)
+            is Screen.RollCall -> when (current.backTarget) {
+                ResultBackTarget.CLASS_DETAIL -> Screen.ClassDetail(current.classId)
+                ResultBackTarget.HISTORY -> Screen.Root(RootTab.HISTORY)
+                ResultBackTarget.CLASSES -> Screen.Root(RootTab.CLASSES)
             }
             is Screen.Result -> when (current.backTarget) {
                 ResultBackTarget.CLASSES -> Screen.Root(RootTab.CLASSES)
@@ -249,21 +258,40 @@ fun AttendanceApp() {
         }
     }
 
-    when (val current = screen) {
+    AnimatedContent(
+        targetState = screen,
+        transitionSpec = {
+            if (initialState is Screen.Root && targetState is Screen.Root) {
+                fadeIn(tween(150)) togetherWith fadeOut(tween(100))
+            } else {
+                val forward = screenDepth(targetState) >= screenDepth(initialState)
+                val enter = if (forward) 1 else -1
+                (slideInHorizontally(tween(220)) { enter * it / 5 } + fadeIn(tween(180))) togetherWith
+                    (slideOutHorizontally(tween(160)) { -enter * it / 5 } + fadeOut(tween(120)))
+            }
+        },
+        label = "screenTransition",
+    ) { current -> when (current) {
         is Screen.Root -> RootScreen(
             selectedTab = current.tab,
             classes = classes,
             sessions = sessions,
+            drafts = drafts,
             settings = settings,
             onSelectTab = { screen = Screen.Root(it) },
             onAddClass = repository::addClass,
-            onStartClass = { screen = Screen.RollCall(it) },
+            onStartClass = { classId -> screen = Screen.RollCall(classId, repository.newDraftId(), System.currentTimeMillis()) },
             onEditClass = { screen = Screen.ClassDetail(it) },
             onDeleteClass = repository::deleteClass,
             onOpenResult = { classId, sessionId ->
                 screen = Screen.Result(classId, sessionId, ResultBackTarget.HISTORY)
             },
             onDeleteSession = repository::deleteSession,
+            onContinueDraft = { classId, draftId ->
+                val draft = repository.getRollCallDraft(draftId)
+                if (draft != null) screen = Screen.RollCall(classId, draftId, draft.createdAt, ResultBackTarget.HISTORY)
+            },
+            onDeleteDraft = repository::deleteRollCallDraft,
             onAddReason = repository::addAbsenceReason,
             onRemoveReason = repository::removeAbsenceReason,
             onMoveReason = repository::moveAbsenceReason,
@@ -299,10 +327,11 @@ fun AttendanceApp() {
                     onAddStudent = { name, number -> repository.addStudent(group.id, name, number) },
                     onRemoveStudent = { repository.removeStudent(group.id, it) },
                     onImport = { repository.importStudents(group.id, it) },
-                    onStart = { screen = Screen.RollCall(group.id, backToClassDetail = true) },
+                    onStart = { screen = Screen.RollCall(group.id, repository.newDraftId(), System.currentTimeMillis(), ResultBackTarget.CLASS_DETAIL) },
                     onOpenResult = { screen = Screen.Result(group.id, it) },
                     onDeleteSession = repository::deleteSession,
                     onOpenSettings = { screen = Screen.ClassSettings(group.id) },
+                    onOpenSituations = { screen = Screen.Situations(group.id) },
                     onRenameClass = { repository.renameClass(group.id, it) },
                     onUpdateStudent = { studentId, name, number ->
                         repository.updateStudent(group.id, studentId, name, number)
@@ -328,6 +357,23 @@ fun AttendanceApp() {
             }
         }
 
+        is Screen.Situations -> {
+            val group = classes.firstOrNull { it.id == current.classId }
+            if (group == null) screen = Screen.Root(RootTab.CLASSES) else SituationScreen(
+                group = group,
+                onBack = { screen = Screen.ClassDetail(group.id) },
+                onAdd = { repository.addSituation(group.id, it) },
+                onRename = { id, name -> repository.renameSituation(group.id, id, name) },
+                onDelete = { repository.deleteSituation(group.id, it) },
+                onSetAssignment = { situationId, studentId, status, reason ->
+                    repository.setSituationAssignment(group.id, situationId, studentId, status, reason)
+                },
+                onRemoveAssignment = { situationId, studentId ->
+                    repository.removeSituationAssignment(group.id, situationId, studentId)
+                },
+            )
+        }
+
         is Screen.RollCall -> {
             val group = classes.firstOrNull { it.id == current.classId }
             if (group == null) {
@@ -336,22 +382,19 @@ fun AttendanceApp() {
                 RollCallScreen(
                     group = group,
                     settings = settings,
-                    initialEntries = repository.getRollCallDraft(group.id),
-                    onDraftChange = { repository.saveRollCallDraft(group.id, it) },
+                    draftKey = current.draftId,
+                    initialEntries = repository.getRollCallDraft(current.draftId)?.entries.orEmpty(),
+                    onDraftChange = { repository.saveRollCallDraft(current.draftId, group.id, current.createdAt, it) },
                     onBack = {
-                        screen = if (current.backToClassDetail) {
-                            Screen.ClassDetail(group.id)
-                        } else {
-                            Screen.Root(RootTab.CLASSES)
+                        screen = when (current.backTarget) {
+                            ResultBackTarget.CLASS_DETAIL -> Screen.ClassDetail(group.id)
+                            ResultBackTarget.HISTORY -> Screen.Root(RootTab.HISTORY)
+                            ResultBackTarget.CLASSES -> Screen.Root(RootTab.CLASSES)
                         }
                     },
                     onFinish = { entries ->
-                        val sessionId = repository.saveSession(group.id, entries)
-                        val backTarget = if (current.backToClassDetail) {
-                            ResultBackTarget.CLASS_DETAIL
-                        } else {
-                            ResultBackTarget.CLASSES
-                        }
+                        val sessionId = repository.saveSession(group.id, entries, current.draftId)
+                        val backTarget = current.backTarget
                         appScope.launch {
                             if (withContext(Dispatchers.IO) { repository.awaitSaved() }) {
                                 screen = Screen.Result(group.id, sessionId, backTarget)
@@ -385,7 +428,14 @@ fun AttendanceApp() {
                 )
             }
         }
-    }
+    } }
+}
+
+private fun screenDepth(screen: Screen): Int = when (screen) {
+    is Screen.Root -> 0
+    is Screen.ClassDetail -> 1
+    is Screen.ClassSettings, is Screen.Situations, is Screen.RollCall -> 2
+    is Screen.Result -> 3
 }
 
 @Composable
@@ -393,6 +443,7 @@ private fun RootScreen(
     selectedTab: RootTab,
     classes: List<ClassGroup>,
     sessions: List<AttendanceSession>,
+    drafts: List<RollCallDraft>,
     settings: AppSettings,
     onSelectTab: (RootTab) -> Unit,
     onAddClass: (String) -> Unit,
@@ -401,6 +452,8 @@ private fun RootScreen(
     onDeleteClass: (String) -> Unit,
     onOpenResult: (String, String) -> Unit,
     onDeleteSession: (String) -> Unit,
+    onContinueDraft: (String, String) -> Unit,
+    onDeleteDraft: (String) -> Unit,
     onAddReason: (String) -> Unit,
     onRemoveReason: (String) -> Unit,
     onMoveReason: (Int, Int) -> Unit,
@@ -438,8 +491,11 @@ private fun RootScreen(
         RootTab.HISTORY -> HistoryScreen(
             classes = classes,
             sessions = sessions,
+            drafts = drafts,
             onOpenResult = onOpenResult,
             onDeleteSession = onDeleteSession,
+            onContinueDraft = onContinueDraft,
+            onDeleteDraft = onDeleteDraft,
             titleMode = settings.historyTitleMode,
             showStatistics = settings.showHistoryStatistics,
             bottomBar = bottomBar,
@@ -697,6 +753,7 @@ private fun ClassDetailScreen(
     onOpenResult: (String) -> Unit,
     onDeleteSession: (String) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenSituations: () -> Unit,
     onRenameClass: (String) -> Unit,
     onUpdateStudent: (String, String, String) -> Unit,
 ) {
@@ -808,6 +865,12 @@ private fun ClassDetailScreen(
                 ) {
                     Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("导出名单", modifier = Modifier.padding(start = 5.dp))
+                }
+            }
+            item {
+                OutlinedButton(onClick = onOpenSituations, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.EventBusy, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Text("班级情况 · ${group.situations.size}", modifier = Modifier.padding(start = 5.dp))
                 }
             }
             item { SectionTitle("学生名单 · ${group.students.size}") }
@@ -1001,13 +1064,14 @@ private fun ClassDetailScreen(
 private fun RollCallScreen(
     group: ClassGroup,
     settings: AppSettings,
+    draftKey: String,
     initialEntries: List<AttendanceEntry>,
     onDraftChange: (List<AttendanceEntry>) -> Unit,
     onBack: () -> Unit,
     onFinish: (List<AttendanceEntry>) -> Unit,
 ) {
     val effectiveSettings = settings.forClass(group)
-    val marks = remember(group.id) {
+    val marks = remember(group.id, draftKey) {
         mutableStateMapOf<String, Mark>().apply {
             val currentStudentIds = group.students.mapTo(mutableSetOf()) { it.id }
             initialEntries.forEach { entry ->
@@ -1019,16 +1083,12 @@ private fun RollCallScreen(
     }
     var editingStudent by remember { mutableStateOf<Student?>(null) }
     var showFinishDialog by remember { mutableStateOf(false) }
-    var showClearDraftDialog by remember(group.id) { mutableStateOf(false) }
-    var finishing by remember(group.id) { mutableStateOf(false) }
+    var showClearDraftDialog by remember(group.id, draftKey) { mutableStateOf(false) }
+    var showSituations by remember(group.id, draftKey) { mutableStateOf(false) }
+    var finishing by remember(group.id, draftKey) { mutableStateOf(false) }
     val checked = group.students.count { marks[it.id]?.status != null }
 
-    fun updateMark(student: Student, mark: Mark?) {
-        if (mark == null) {
-            marks.remove(student.id)
-        } else {
-            marks[student.id] = mark
-        }
+    fun persistMarks() {
         onDraftChange(
             group.students.mapNotNull { currentStudent ->
                 marks[currentStudent.id]?.let { currentMark ->
@@ -1044,6 +1104,22 @@ private fun RollCallScreen(
         )
     }
 
+    fun updateMark(student: Student, mark: Mark?) {
+        if (mark == null) marks.remove(student.id) else marks[student.id] = mark
+        persistMarks()
+    }
+
+    fun applySituation(situationId: String) {
+        val situation = group.situations.firstOrNull { it.id == situationId } ?: return
+        situation.assignments.forEach { assignment ->
+            if (group.students.any { it.id == assignment.studentId }) {
+                marks[assignment.studentId] = Mark(assignment.status, assignment.reason)
+            }
+        }
+        persistMarks()
+        showSituations = false
+    }
+
     fun applyAction(student: Student, action: GestureAction) {
         when (action) {
             GestureAction.EDIT -> editingStudent = student
@@ -1051,7 +1127,7 @@ private fun RollCallScreen(
             GestureAction.LATE -> updateMark(student, Mark(AttendanceStatus.LATE, effectiveSettings.defaultReason))
             GestureAction.LEAVE -> updateMark(student, Mark(AttendanceStatus.LEAVE, effectiveSettings.defaultReason))
             GestureAction.ABSENT -> updateMark(student, Mark(AttendanceStatus.ABSENT, effectiveSettings.defaultReason))
-            GestureAction.EXEMPT -> updateMark(student, Mark(AttendanceStatus.EXEMPT))
+            GestureAction.EXEMPT -> updateMark(student, Mark(AttendanceStatus.EXEMPT, effectiveSettings.defaultReason))
             GestureAction.CLEAR -> updateMark(student, null)
         }
     }
@@ -1084,6 +1160,9 @@ private fun RollCallScreen(
                     }
                 },
                 actions = {
+                    if (group.situations.isNotEmpty()) IconButton(onClick = { showSituations = true }) {
+                        Icon(Icons.Default.EventBusy, contentDescription = "应用班级情况")
+                    }
                     TextButton(
                         onClick = { showClearDraftDialog = true },
                         enabled = marks.isNotEmpty(),
@@ -1129,6 +1208,11 @@ private fun RollCallScreen(
                                 "点按：${effectiveSettings.defaultStatus.label} · 长按：${effectiveSettings.longPressAction.label} · 左滑：${effectiveSettings.swipeLeftAction.label} · 右滑：${effectiveSettings.swipeRightAction.label}",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Text(
+                                "已标记内容自动保存，可从历史页继续",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
                             )
                         }
                     }
@@ -1186,6 +1270,23 @@ private fun RollCallScreen(
                 updateMark(student, mark)
                 editingStudent = null
             },
+        )
+    }
+
+    if (showSituations) {
+        AlertDialog(
+            onDismissRequest = { showSituations = false },
+            title = { Text("复用班级情况") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("仅覆写情况中已定义的学生，其他点名结果保持不变。")
+                group.situations.forEach { situation ->
+                    OutlinedButton(onClick = { applySituation(situation.id) }, modifier = Modifier.fillMaxWidth()) {
+                        Text("${situation.name} · ${situation.assignments.size} 人")
+                    }
+                }
+            } },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { showSituations = false }) { Text("取消") } },
         )
     }
 
@@ -1436,22 +1537,26 @@ private fun ResultScreen(
 private fun HistoryScreen(
     classes: List<ClassGroup>,
     sessions: List<AttendanceSession>,
+    drafts: List<RollCallDraft>,
     onOpenResult: (String, String) -> Unit,
     onDeleteSession: (String) -> Unit,
+    onContinueDraft: (String, String) -> Unit,
+    onDeleteDraft: (String) -> Unit,
     titleMode: HistoryTitleMode,
     showStatistics: Boolean,
     bottomBar: @Composable () -> Unit,
 ) {
     val classNames = classes.associate { it.id to it.name }
     var sessionToDelete by remember { mutableStateOf<AttendanceSession?>(null) }
+    var draftToDelete by remember { mutableStateOf<RollCallDraft?>(null) }
     Scaffold(
         topBar = { RootLargeTopBar("点名历史") },
         bottomBar = bottomBar,
     ) { padding ->
-        if (sessions.isEmpty()) {
+        if (sessions.isEmpty() && drafts.isEmpty()) {
             EmptyState(
                 title = "还没有点名记录",
-                description = "完成一次点名后，结果会显示在这里",
+                description = "点名草稿和完成的结果会显示在这里",
                 modifier = Modifier.padding(padding),
             )
         } else {
@@ -1460,6 +1565,18 @@ private fun HistoryScreen(
                 contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 24.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                if (drafts.isNotEmpty()) {
+                    item { SectionTitle("草稿") }
+                    items(drafts.sortedByDescending { it.updatedAt }, key = { "draft-${it.id}" }) { draft ->
+                        DraftHistoryItem(
+                            className = classNames[draft.classId].orEmpty(), draft = draft,
+                            titleMode = titleMode,
+                            onContinue = { onContinueDraft(draft.classId, draft.id) },
+                            onDelete = { draftToDelete = draft },
+                        )
+                    }
+                    if (sessions.isNotEmpty()) item { SectionTitle("已完成") }
+                }
                 items(sessions.sortedByDescending { it.createdAt }, key = { it.id }) { session ->
                     GlobalHistoryItem(
                         className = classNames[session.classId].orEmpty(),
@@ -1482,6 +1599,46 @@ private fun HistoryScreen(
                 sessionToDelete = null
             },
         )
+    }
+    draftToDelete?.let { draft ->
+        AlertDialog(
+            onDismissRequest = { draftToDelete = null },
+            title = { Text("删除点名草稿？") },
+            text = { Text("草稿中的 ${draft.entries.size} 条已标记状态将被删除。") },
+            confirmButton = { TextButton(onClick = { onDeleteDraft(draft.id); draftToDelete = null }) { Text("删除") } },
+            dismissButton = { TextButton(onClick = { draftToDelete = null }) { Text("取消") } },
+        )
+    }
+}
+
+@Composable
+private fun DraftHistoryItem(
+    className: String,
+    draft: RollCallDraft,
+    titleMode: HistoryTitleMode,
+    onContinue: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onContinue),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        shape = RoundedCornerShape(22.dp),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                val resolvedClassName = className.ifBlank { "已删除的班级" }
+                Text(
+                    (if (titleMode == HistoryTitleMode.CLASS_NAME) resolvedClassName else formatTime(draft.updatedAt)) + " · 草稿",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    "${if (titleMode == HistoryTitleMode.CLASS_NAME) formatTime(draft.updatedAt) else resolvedClassName} · 已标记 ${draft.entries.size} 人",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            TextButton(onClick = onContinue) { Text("继续") }
+            IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "删除草稿") }
+        }
     }
 }
 
@@ -1568,9 +1725,11 @@ private fun SettingsScreen(
             AnimatedContent(
                 targetState = page,
                 transitionSpec = {
-                    val direction = if (targetState == null) -1 else 1
-                    ((slideInHorizontally(tween(160)) { direction * it / 12 } + fadeIn(tween(160)))
-                        togetherWith (slideOutHorizontally(tween(120)) { -direction * it / 12 } + fadeOut(tween(100))))
+                    val enteringDetail = targetState != null
+                    val direction = if (enteringDetail) 1 else -1
+                    val enterDuration = if (enteringDetail) 220 else 160
+                    ((slideInHorizontally(tween(enterDuration)) { direction * it / 5 } + fadeIn(tween(enterDuration)))
+                        togetherWith (slideOutHorizontally(tween(160)) { -direction * it / 5 } + fadeOut(tween(120))))
                         .using(SizeTransform(sizeAnimationSpec = { _, _ -> tween(0) }))
                 },
                 label = "settingsPage",
@@ -3278,6 +3437,7 @@ private fun statusUsesReason(status: AttendanceStatus): Boolean = status in setO
     AttendanceStatus.LATE,
     AttendanceStatus.LEAVE,
     AttendanceStatus.ABSENT,
+    AttendanceStatus.EXEMPT,
 )
 
 private fun buildRosterExport(group: ClassGroup): String = buildString {

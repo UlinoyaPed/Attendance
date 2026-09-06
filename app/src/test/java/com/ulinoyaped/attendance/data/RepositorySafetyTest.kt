@@ -119,4 +119,33 @@ class RepositorySafetyTest {
         assertEquals(before + 1, store.commits.size)
         assertEquals("", repository.classes.value.single().attendanceSettings?.defaultReason)
     }
+
+    @Test fun situationsOverwriteOneStudentAtomically() {
+        val repository = AttendanceRepository(Store().preferences)
+        repository.addClass("Demo")
+        val classId = repository.classes.value.single().id
+        repository.addStudent(classId, "Alice", "001")
+        repository.addSituation(classId, "长期安排")
+        val group = repository.classes.value.single()
+        val studentId = group.students.single().id
+        val situationId = group.situations.single().id
+        repository.setSituationAssignment(classId, situationId, studentId, AttendanceStatus.LEAVE, "集训")
+        repository.setSituationAssignment(classId, situationId, studentId, AttendanceStatus.EXEMPT, "不参加本课程")
+        val assignment = repository.classes.value.single().situations.single().assignments.single()
+        assertEquals(AttendanceStatus.EXEMPT, assignment.status)
+        assertEquals("不参加本课程", assignment.reason)
+    }
+
+    @Test fun multipleDraftsAreIndependentAndFinishingRemovesOnlyCurrentOne() {
+        val repository = AttendanceRepository(Store().preferences)
+        repository.addClass("Demo")
+        val classId = repository.classes.value.single().id
+        repository.addStudent(classId, "Alice", "001")
+        val student = repository.classes.value.single().students.single()
+        val entries = listOf(AttendanceEntry(student.id, student.name, student.studentNumber, AttendanceStatus.PRESENT))
+        repository.saveRollCallDraft("draft-1", classId, 1, entries)
+        repository.saveRollCallDraft("draft-2", classId, 2, entries.map { it.copy(status = AttendanceStatus.EXEMPT, reason = "长期请假") })
+        repository.saveSession(classId, entries, "draft-1")
+        assertEquals(listOf("draft-2"), repository.drafts.value.map { it.id })
+    }
 }

@@ -56,6 +56,24 @@ fun validateBackup(root: JSONObject) {
             field(students.getJSONObject(j), "name")
             field(students.getJSONObject(j), "studentNumber", required = false)
         }
+        val situations = group.optJSONArray("situations") ?: JSONArray()
+        unique(situations, "id", 100)
+        for (j in 0 until situations.length()) {
+            val situation = situations.getJSONObject(j)
+            field(situation, "name")
+            val assignments = situation.optJSONArray("assignments") ?: JSONArray()
+            val assignedStudents = unique(assignments, "studentId", MAX_STUDENTS)
+            require(assignedStudents.all { it in rosterIds.getValue(group.getString("id")) }) {
+                "情况引用不存在的学生"
+            }
+            for (k in 0 until assignments.length()) {
+                val assignment = assignments.getJSONObject(k)
+                require(assignment.getString("status") in AttendanceStatus.entries.filter { it != AttendanceStatus.UNMARKED }.map { it.name }) {
+                    "情况状态无效"
+                }
+                field(assignment, "reason", 240, false)
+            }
+        }
         group.optJSONObject("attendanceSettings")?.let(::settings)
     }
     fun entries(obj: JSONObject, draft: Boolean) {
@@ -80,8 +98,16 @@ fun validateBackup(root: JSONObject) {
         entries(session, false)
     }
     val drafts = if (root.has("rollCallDrafts")) root.getJSONArray("rollCallDrafts") else JSONArray()
-    unique(drafts, "classId", 200)
-    for (i in 0 until drafts.length()) entries(drafts.getJSONObject(i), true)
+    require(drafts.length() <= 1000) { "草稿数量超限" }
+    val draftIds = mutableSetOf<String>()
+    for (i in 0 until drafts.length()) {
+        val draft = drafts.getJSONObject(i)
+        val id = if (draft.has("id")) field(draft, "id") else "legacy-${field(draft, "classId")}"
+        require(draftIds.add(id)) { "草稿 ID 重复" }
+        if (draft.has("createdAt")) require(draft.getLong("createdAt") > 0) { "草稿时间无效" }
+        if (draft.has("updatedAt")) require(draft.getLong("updatedAt") > 0) { "草稿时间无效" }
+        entries(draft, true)
+    }
     val options = root.getJSONObject("settings")
     settings(options)
     val reasons = if (options.has("absenceReasons")) options.getJSONArray("absenceReasons") else JSONArray()

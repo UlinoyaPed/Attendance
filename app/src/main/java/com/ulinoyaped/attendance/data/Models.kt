@@ -11,6 +11,19 @@ data class ClassGroup(
     val name: String,
     val students: List<Student> = emptyList(),
     val attendanceSettings: ClassAttendanceSettings? = null,
+    val situations: List<ClassSituation> = emptyList(),
+)
+
+data class SituationAssignment(
+    val studentId: String,
+    val status: AttendanceStatus,
+    val reason: String = "",
+)
+
+data class ClassSituation(
+    val id: String,
+    val name: String,
+    val assignments: List<SituationAssignment> = emptyList(),
 )
 
 enum class AttendanceStatus(val label: String) {
@@ -34,6 +47,14 @@ data class AttendanceSession(
     val id: String,
     val classId: String,
     val createdAt: Long,
+    val entries: List<AttendanceEntry>,
+)
+
+data class RollCallDraft(
+    val id: String,
+    val classId: String,
+    val createdAt: Long,
+    val updatedAt: Long,
     val entries: List<AttendanceEntry>,
 )
 

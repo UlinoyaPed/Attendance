@@ -27,7 +27,8 @@ class AttendanceRepository internal constructor(private val preferences: android
     private val _settings = MutableStateFlow(loadSettings())
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
-    private val rollCallDrafts = loadRollCallDrafts().toMutableMap()
+    private val _drafts = MutableStateFlow(loadRollCallDrafts())
+    val drafts: StateFlow<List<RollCallDraft>> = _drafts.asStateFlow()
 
     init {
         if (!loadFailed) runCatching {
@@ -50,7 +51,7 @@ class AttendanceRepository internal constructor(private val preferences: android
     fun deleteClass(classId: String) {
         _classes.value = _classes.value.filterNot { it.id == classId }
         _sessions.value = _sessions.value.filterNot { it.classId == classId }
-        rollCallDrafts.remove(classId)
+        _drafts.value = _drafts.value.filterNot { it.classId == classId }
         saveClasses()
     }
 
@@ -75,12 +76,16 @@ class AttendanceRepository internal constructor(private val preferences: android
     }
 
     fun removeStudent(classId: String, studentId: String) {
-        rollCallDrafts[classId]?.let { draft ->
-            val remaining = draft.filterNot { it.studentId == studentId }
-            if (remaining.isEmpty()) rollCallDrafts.remove(classId) else rollCallDrafts[classId] = remaining
+        _drafts.value = _drafts.value.map { draft ->
+            if (draft.classId == classId) draft.copy(entries = draft.entries.filterNot { it.studentId == studentId }) else draft
         }
         updateClass(classId) { group ->
-            group.copy(students = group.students.filterNot { it.id == studentId })
+            group.copy(
+                students = group.students.filterNot { it.id == studentId },
+                situations = group.situations.map { situation ->
+                    situation.copy(assignments = situation.assignments.filterNot { it.studentId == studentId })
+                },
+            )
         }
     }
 
@@ -120,7 +125,7 @@ class AttendanceRepository internal constructor(private val preferences: android
         return addedCount
     }
 
-    fun saveSession(classId: String, entries: List<AttendanceEntry>): String {
+    fun saveSession(classId: String, entries: List<AttendanceEntry>, draftId: String? = null): String {
         val session = AttendanceSession(
             id = newId(),
             classId = classId,
@@ -128,21 +133,99 @@ class AttendanceRepository internal constructor(private val preferences: android
             entries = entries,
         )
         _sessions.value = listOf(session) + _sessions.value
-        rollCallDrafts.remove(classId)
+        _drafts.value = if (draftId == null) {
+            _drafts.value.filterNot { it.classId == classId }
+        } else {
+            _drafts.value.filterNot { it.id == draftId }
+        }
         saveSessions()
         return session.id
     }
 
-    fun getRollCallDraft(classId: String): List<AttendanceEntry> =
-        rollCallDrafts[classId].orEmpty()
+    fun getRollCallDraft(draftId: String): RollCallDraft? = _drafts.value.firstOrNull { it.id == draftId }
 
-    fun saveRollCallDraft(classId: String, entries: List<AttendanceEntry>) {
-        if (entries.isEmpty()) {
-            rollCallDrafts.remove(classId)
+    fun newDraftId(): String = newId()
+
+    fun saveRollCallDraft(draftId: String, classId: String, createdAt: Long, entries: List<AttendanceEntry>) {
+        requireSafeField(draftId, "草稿 ID")
+        require(createdAt > 0) { "草稿时间无效" }
+        val group = _classes.value.firstOrNull { it.id == classId } ?: error("班级不存在")
+        val studentIds = group.students.mapTo(mutableSetOf()) { it.id }
+        require(entries.size <= MAX_STUDENTS && entries.map { it.studentId }.toSet().size == entries.size) { "草稿学生重复或数量超限" }
+        entries.forEach { entry ->
+            require(entry.studentId in studentIds && entry.status != AttendanceStatus.UNMARKED) { "草稿内容无效" }
+            requireSafeField(entry.studentName, "学生姓名")
+            requireSafeField(entry.studentNumber, "学号", required = false)
+            requireSafeField(entry.reason, "原因", 240, required = false)
+        }
+        require(_drafts.value.any { it.id == draftId } || _drafts.value.size < 1000) { "草稿数量已达上限" }
+        val now = System.currentTimeMillis()
+        _drafts.value = if (entries.isEmpty()) {
+            _drafts.value.filterNot { it.id == draftId }
         } else {
-            rollCallDrafts[classId] = entries
+            val draft = RollCallDraft(draftId, classId, createdAt, now, entries)
+            listOf(draft) + _drafts.value.filterNot { it.id == draftId }
         }
         saveRollCallDrafts()
+    }
+
+    internal fun saveRollCallDraft(classId: String, entries: List<AttendanceEntry>) =
+        saveRollCallDraft("legacy-$classId", classId, System.currentTimeMillis(), entries)
+
+    fun deleteRollCallDraft(draftId: String) {
+        _drafts.value = _drafts.value.filterNot { it.id == draftId }
+        saveRollCallDrafts()
+    }
+
+    fun addSituation(classId: String, name: String) {
+        val clean = name.trim()
+        requireSafeField(clean, "情况名称")
+        updateClass(classId) {
+            require(it.situations.size < 100) { "每个班级最多 100 个情况" }
+            it.copy(situations = it.situations + ClassSituation(newId(), clean))
+        }
+    }
+
+    fun renameSituation(classId: String, situationId: String, name: String) {
+        val clean = name.trim()
+        requireSafeField(clean, "情况名称")
+        updateClass(classId) { group -> group.copy(situations = group.situations.map {
+            if (it.id == situationId) it.copy(name = clean) else it
+        }) }
+    }
+
+    fun deleteSituation(classId: String, situationId: String) = updateClass(classId) { group ->
+        group.copy(situations = group.situations.filterNot { it.id == situationId })
+    }
+
+    fun setSituationAssignment(
+        classId: String,
+        situationId: String,
+        studentId: String,
+        status: AttendanceStatus,
+        reason: String,
+    ) {
+        require(status != AttendanceStatus.UNMARKED)
+        val cleanReason = reason.trim().takeUnless { status == AttendanceStatus.PRESENT }.orEmpty()
+        requireSafeField(cleanReason, "原因", 240, required = false)
+        updateClass(classId) { group ->
+            require(group.students.any { it.id == studentId }) { "学生不存在" }
+            require(group.situations.any { it.id == situationId }) { "情况不存在" }
+            group.copy(situations = group.situations.map { situation ->
+            if (situation.id != situationId) situation else situation.copy(
+                assignments = situation.assignments.filterNot { it.studentId == studentId } +
+                    SituationAssignment(studentId, status, cleanReason),
+            )
+            })
+        }
+    }
+
+    fun removeSituationAssignment(classId: String, situationId: String, studentId: String) = updateClass(classId) { group ->
+        group.copy(situations = group.situations.map { situation ->
+            if (situation.id == situationId) situation.copy(
+                assignments = situation.assignments.filterNot { it.studentId == studentId },
+            ) else situation
+        })
     }
 
     fun deleteSession(sessionId: String) {
@@ -318,8 +401,7 @@ class AttendanceRepository internal constructor(private val preferences: android
         check(committed) { "备份写入失败，原数据已保留" }
         _classes.value = restoredClasses
         _sessions.value = restoredSessions
-        rollCallDrafts.clear()
-        rollCallDrafts.putAll(restoredDrafts)
+        _drafts.value = restoredDrafts
         _settings.value = restoredSettings
         loadFailed = false
         _storageError.value = null
@@ -361,7 +443,18 @@ class AttendanceRepository internal constructor(private val preferences: android
                     .put("id", group.id)
                     .put("name", group.name)
                     .put("students", students)
-                    .put("attendanceSettings", group.attendanceSettings?.toJson() ?: JSONObject.NULL),
+                    .put("attendanceSettings", group.attendanceSettings?.toJson() ?: JSONObject.NULL)
+                    .put("situations", JSONArray().apply {
+                        group.situations.forEach { situation -> put(JSONObject()
+                            .put("id", situation.id)
+                            .put("name", situation.name)
+                            .put("assignments", JSONArray().apply {
+                                situation.assignments.forEach { assignment -> put(JSONObject()
+                                    .put("studentId", assignment.studentId)
+                                    .put("status", assignment.status.name)
+                                    .put("reason", assignment.reason)) }
+                            })) }
+                    }),
             )
         }
         return array
@@ -384,7 +477,7 @@ class AttendanceRepository internal constructor(private val preferences: android
     private fun snapshot(
         groups: List<ClassGroup> = _classes.value,
         sessions: List<AttendanceSession> = _sessions.value,
-        drafts: Map<String, List<AttendanceEntry>> = rollCallDrafts,
+        drafts: List<RollCallDraft> = _drafts.value,
         settings: AppSettings = _settings.value,
     ): String = JSONObject().put("formatVersion", 1)
         .put("classes", classesToJson(groups)).put("sessions", sessionsToJson(sessions))
@@ -398,7 +491,7 @@ class AttendanceRepository internal constructor(private val preferences: android
         if (loadFailed || _storageError.value != null) return
         val groups = _classes.value
         val sessions = _sessions.value
-        val drafts = rollCallDrafts.toMap()
+        val drafts = _drafts.value
         val settings = _settings.value
         writer.execute {
             if (_storageError.value == null && !runCatching {
@@ -434,12 +527,15 @@ class AttendanceRepository internal constructor(private val preferences: android
         preferences.all.forEach { (key, value) -> put(key, value) }
     }.toString(2)
 
-    private fun rollCallDraftsToJson(drafts: Map<String, List<AttendanceEntry>> = rollCallDrafts): JSONArray = JSONArray().apply {
-        drafts.forEach { (classId, entries) ->
+    private fun rollCallDraftsToJson(drafts: List<RollCallDraft> = _drafts.value): JSONArray = JSONArray().apply {
+        drafts.forEach { draft ->
             put(
                 JSONObject()
-                    .put("classId", classId)
-                    .put("entries", attendanceEntriesToJson(entries)),
+                    .put("id", draft.id)
+                    .put("classId", draft.classId)
+                    .put("createdAt", draft.createdAt)
+                    .put("updatedAt", draft.updatedAt)
+                    .put("entries", attendanceEntriesToJson(draft.entries)),
             )
         }
     }
@@ -535,6 +631,26 @@ class AttendanceRepository internal constructor(private val preferences: android
                         name = item.getString("name"),
                         students = students,
                         attendanceSettings = item.optJSONObject("attendanceSettings")?.toClassAttendanceSettings(),
+                        situations = item.optJSONArray("situations")?.let { situations -> buildList {
+                            for (situationIndex in 0 until situations.length()) {
+                                val situation = situations.getJSONObject(situationIndex)
+                                val assignments = situation.optJSONArray("assignments") ?: JSONArray()
+                                add(ClassSituation(
+                                    id = situation.getString("id"),
+                                    name = situation.getString("name"),
+                                    assignments = buildList {
+                                        for (assignmentIndex in 0 until assignments.length()) {
+                                            val assignment = assignments.getJSONObject(assignmentIndex)
+                                            add(SituationAssignment(
+                                                studentId = assignment.getString("studentId"),
+                                                status = AttendanceStatus.valueOf(assignment.getString("status")),
+                                                reason = assignment.optString("reason"),
+                                            ))
+                                        }
+                                    },
+                                ))
+                            }
+                        } }.orEmpty(),
                     ),
                 )
             }
@@ -563,19 +679,24 @@ class AttendanceRepository internal constructor(private val preferences: android
         }
     }
 
-    private fun loadRollCallDrafts(): Map<String, List<AttendanceEntry>> = runCatching {
+    private fun loadRollCallDrafts(): List<RollCallDraft> = runCatching {
         parseRollCallDrafts(preferences.getString(KEY_ROLL_CALL_DRAFTS, "[]").orEmpty())
-    }.onFailure { loadFailed = true; _storageError.value = "本地草稿损坏，已停止自动保存。" }.getOrDefault(emptyMap())
+    }.onFailure { loadFailed = true; _storageError.value = "本地草稿损坏，已停止自动保存。" }.getOrDefault(emptyList())
 
-    private fun parseRollCallDrafts(raw: String): Map<String, List<AttendanceEntry>> {
+    private fun parseRollCallDrafts(raw: String): List<RollCallDraft> {
         val array = JSONArray(raw)
-        return buildMap {
+        return buildList {
             for (index in 0 until array.length()) {
                 val item = array.getJSONObject(index)
-                put(
-                    item.getString("classId"),
-                    parseAttendanceEntries(item.optJSONArray("entries") ?: JSONArray()),
-                )
+                val classId = item.getString("classId")
+                val fallbackTime = System.currentTimeMillis()
+                add(RollCallDraft(
+                    id = item.optString("id").ifEmpty { "legacy-$classId" },
+                    classId = classId,
+                    createdAt = item.optLong("createdAt", fallbackTime),
+                    updatedAt = item.optLong("updatedAt", fallbackTime),
+                    entries = parseAttendanceEntries(item.optJSONArray("entries") ?: JSONArray()),
+                ))
             }
         }
     }
