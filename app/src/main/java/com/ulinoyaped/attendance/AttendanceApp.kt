@@ -171,12 +171,10 @@ private sealed interface Screen {
     data class ClassDetail(val classId: String, val backToActions: Boolean = false) : Screen
     data class ClassSettings(val classId: String, val backToActions: Boolean = false) : Screen
     data class Situations(val classId: String, val backToActions: Boolean = false) : Screen
-    data class Materials(val classId: String, val backToActions: Boolean = false) : Screen
     data class MaterialTaskDetail(
         val classId: String,
         val taskId: String,
         val backTarget: MaterialBackTarget = MaterialBackTarget.CLASS_ACTIONS,
-        val managementBackToActions: Boolean = false,
     ) : Screen
     data class RollCall(
         val classId: String,
@@ -200,7 +198,6 @@ private enum class ResultBackTarget {
 
 private enum class MaterialBackTarget {
     CLASS_ACTIONS,
-    MATERIALS,
     HISTORY,
 }
 
@@ -214,6 +211,36 @@ private data class Mark(
     val status: AttendanceStatus,
     val reason: String = "",
 )
+
+private sealed interface DraftHistoryRow {
+    val key: String
+    val time: Long
+
+    data class Attendance(val draft: RollCallDraft) : DraftHistoryRow {
+        override val key = "draft-${draft.id}"
+        override val time = draft.updatedAt
+    }
+
+    data class Materials(val classId: String, val task: MaterialTask) : DraftHistoryRow {
+        override val key = "material-draft-${task.id}"
+        override val time = task.updatedAt
+    }
+}
+
+private sealed interface CompletedHistoryRow {
+    val key: String
+    val time: Long
+
+    data class Attendance(val session: AttendanceSession) : CompletedHistoryRow {
+        override val key = "session-${session.id}"
+        override val time = session.createdAt
+    }
+
+    data class Materials(val classId: String, val task: MaterialTask) : CompletedHistoryRow {
+        override val key = "material-completed-${task.id}"
+        override val time = task.completedAt ?: task.updatedAt
+    }
+}
 
 private enum class SettingSelector {
     DEFAULT_STATUS,
@@ -266,10 +293,8 @@ fun AttendanceApp() {
             is Screen.ClassDetail -> if (current.backToActions) Screen.ClassActions(current.classId) else Screen.Root(RootTab.CLASSES)
             is Screen.ClassSettings -> Screen.ClassDetail(current.classId, current.backToActions)
             is Screen.Situations -> Screen.ClassDetail(current.classId, current.backToActions)
-            is Screen.Materials -> Screen.ClassDetail(current.classId, current.backToActions)
             is Screen.MaterialTaskDetail -> when (current.backTarget) {
                 MaterialBackTarget.CLASS_ACTIONS -> Screen.ClassActions(current.classId)
-                MaterialBackTarget.MATERIALS -> Screen.Materials(current.classId, current.managementBackToActions)
                 MaterialBackTarget.HISTORY -> Screen.Root(RootTab.HISTORY)
             }
             is Screen.RollCall -> when (current.backTarget) {
@@ -374,7 +399,6 @@ fun AttendanceApp() {
                 ClassDetailScreen(
                     group = group,
                     settings = settings,
-                    sessions = sessions.filter { it.classId == group.id },
                     onBack = {
                         screen = if (current.backToActions) Screen.ClassActions(group.id) else Screen.Root(RootTab.CLASSES)
                     },
@@ -385,11 +409,8 @@ fun AttendanceApp() {
                         val draft = repository.createRollCallDraft(group.id)
                         screen = Screen.RollCall(group.id, draft.id, draft.createdAt, ResultBackTarget.CLASS_DETAIL)
                     },
-                    onOpenResult = { screen = Screen.Result(group.id, it) },
-                    onDeleteSession = repository::deleteSession,
                     onOpenSettings = { screen = Screen.ClassSettings(group.id, current.backToActions) },
                     onOpenSituations = { screen = Screen.Situations(group.id, current.backToActions) },
-                    onOpenMaterials = { screen = Screen.Materials(group.id, current.backToActions) },
                     onRenameClass = { repository.renameClass(group.id, it) },
                     onUpdateStudent = { studentId, name, number ->
                         repository.updateStudent(group.id, studentId, name, number)
@@ -432,21 +453,6 @@ fun AttendanceApp() {
             )
         }
 
-        is Screen.Materials -> {
-            val group = classes.firstOrNull { it.id == current.classId }
-            if (group == null) screen = Screen.Root(RootTab.CLASSES) else MaterialTasksScreen(
-                group = group,
-                onBack = { screen = Screen.ClassDetail(group.id, current.backToActions) },
-                onCreate = { title, materials -> repository.createMaterialTask(group.id, title, materials) },
-                onOpen = {
-                    screen = Screen.MaterialTaskDetail(
-                        group.id, it, MaterialBackTarget.MATERIALS, current.backToActions,
-                    )
-                },
-                onDelete = { repository.deleteMaterialTask(group.id, it) },
-            )
-        }
-
         is Screen.MaterialTaskDetail -> {
             val group = classes.firstOrNull { it.id == current.classId }
             val task = group?.materialTasks?.firstOrNull { it.id == current.taskId }
@@ -455,7 +461,6 @@ fun AttendanceApp() {
                 onBack = {
                     screen = when (current.backTarget) {
                         MaterialBackTarget.CLASS_ACTIONS -> Screen.ClassActions(group.id)
-                        MaterialBackTarget.MATERIALS -> Screen.Materials(group.id, current.managementBackToActions)
                         MaterialBackTarget.HISTORY -> Screen.Root(RootTab.HISTORY)
                     }
                 },
@@ -467,7 +472,6 @@ fun AttendanceApp() {
                     repository.deleteMaterialTask(group.id, task.id)
                     screen = when (current.backTarget) {
                         MaterialBackTarget.CLASS_ACTIONS -> Screen.ClassActions(group.id)
-                        MaterialBackTarget.MATERIALS -> Screen.Materials(group.id, current.managementBackToActions)
                         MaterialBackTarget.HISTORY -> Screen.Root(RootTab.HISTORY)
                     }
                 },
@@ -536,7 +540,7 @@ fun AttendanceApp() {
 private fun screenDepth(screen: Screen): Int = when (screen) {
     is Screen.Root -> 0
     is Screen.ClassActions -> 1
-    is Screen.ClassDetail, is Screen.ClassSettings, is Screen.Situations, is Screen.Materials, is Screen.RollCall -> 2
+    is Screen.ClassDetail, is Screen.ClassSettings, is Screen.Situations, is Screen.RollCall -> 2
     is Screen.Result, is Screen.MaterialTaskDetail -> 3
 }
 
@@ -860,17 +864,13 @@ private fun ClassesScreen(
 private fun ClassDetailScreen(
     group: ClassGroup,
     settings: AppSettings,
-    sessions: List<AttendanceSession>,
     onBack: () -> Unit,
     onAddStudent: (String, String) -> Unit,
     onRemoveStudent: (String) -> Unit,
     onImport: (String) -> Int,
     onStart: () -> Unit,
-    onOpenResult: (String) -> Unit,
-    onDeleteSession: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSituations: () -> Unit,
-    onOpenMaterials: () -> Unit,
     onRenameClass: (String) -> Unit,
     onUpdateStudent: (String, String, String) -> Unit,
 ) {
@@ -884,7 +884,6 @@ private fun ClassDetailScreen(
     var showImportOptions by remember { mutableStateOf(false) }
     var showTextImport by remember { mutableStateOf(false) }
     var studentToDelete by remember { mutableStateOf<Student?>(null) }
-    var sessionToDelete by remember { mutableStateOf<AttendanceSession?>(null) }
     var showRenameClass by remember { mutableStateOf(false) }
     var studentToEdit by remember { mutableStateOf<Student?>(null) }
     var showRosterExport by remember { mutableStateOf(false) }
@@ -990,12 +989,6 @@ private fun ClassDetailScreen(
                     Text("班级情况 · ${group.situations.size}", modifier = Modifier.padding(start = 5.dp))
                 }
             }
-            item {
-                OutlinedButton(onClick = onOpenMaterials, modifier = Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.Inventory2, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text("材料登记记录 · ${group.materialTasks.size}", modifier = Modifier.padding(start = 5.dp))
-                }
-            }
             item { SectionTitle("学生名单 · ${group.students.size}") }
             if (group.students.isEmpty()) {
                 item {
@@ -1008,17 +1001,6 @@ private fun ClassDetailScreen(
                         showStudentNumber = effectiveSettings.showStudentNumbers,
                         onEdit = { studentToEdit = student },
                         onDelete = { studentToDelete = student },
-                    )
-                }
-            }
-            if (sessions.isNotEmpty()) {
-                item { SectionTitle("历史记录") }
-                items(sessions, key = { "session-${it.id}" }) { session ->
-                    HistoryItem(
-                        session = session,
-                        showStatistics = settings.showHistoryStatistics,
-                        onClick = { onOpenResult(session.id) },
-                        onDelete = { sessionToDelete = session },
                     )
                 }
             }
@@ -1167,16 +1149,6 @@ private fun ClassDetailScreen(
             },
             dismissButton = {
                 TextButton(onClick = { studentToDelete = null }) { Text("取消") }
-            },
-        )
-    }
-    sessionToDelete?.let { session ->
-        DeleteHistoryDialog(
-            session = session,
-            onDismiss = { sessionToDelete = null },
-            onConfirm = {
-                onDeleteSession(session.id)
-                sessionToDelete = null
             },
         )
     }
@@ -1672,6 +1644,14 @@ private fun HistoryScreen(
 ) {
     val classNames = classes.associate { it.id to it.name }
     val materialTasks = classes.flatMap { group -> group.materialTasks.map { group.id to it } }
+    val draftRows: List<DraftHistoryRow> = (
+        drafts.map { DraftHistoryRow.Attendance(it) } +
+            materialTasks.filter { it.second.completedAt == null }.map { DraftHistoryRow.Materials(it.first, it.second) }
+        ).sortedByDescending { it.time }
+    val completedRows: List<CompletedHistoryRow> = (
+        sessions.map { CompletedHistoryRow.Attendance(it) } +
+            materialTasks.filter { it.second.completedAt != null }.map { CompletedHistoryRow.Materials(it.first, it.second) }
+        ).sortedByDescending { it.time }
     var sessionToDelete by remember { mutableStateOf<AttendanceSession?>(null) }
     var draftToDelete by remember { mutableStateOf<RollCallDraft?>(null) }
     Scaffold(
@@ -1690,36 +1670,37 @@ private fun HistoryScreen(
                 contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 24.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (drafts.isNotEmpty()) {
-                    item { SectionTitle("点名草稿") }
-                    items(drafts.sortedByDescending { it.updatedAt }, key = { "draft-${it.id}" }) { draft ->
-                        DraftHistoryItem(
-                            className = classNames[draft.classId].orEmpty(), draft = draft,
+                if (draftRows.isNotEmpty()) item { SectionTitle("草稿") }
+                items(draftRows, key = { it.key }) { row ->
+                    when (row) {
+                        is DraftHistoryRow.Attendance -> DraftHistoryItem(
+                            className = classNames[row.draft.classId].orEmpty(), draft = row.draft,
                             titleMode = titleMode,
-                            onContinue = { onContinueDraft(draft.classId, draft.id) },
-                            onDelete = { draftToDelete = draft },
+                            onContinue = { onContinueDraft(row.draft.classId, row.draft.id) },
+                            onDelete = { draftToDelete = row.draft },
+                        )
+                        is DraftHistoryRow.Materials -> MaterialHistoryItem(
+                            className = classNames[row.classId].orEmpty(), task = row.task,
+                            onClick = { onOpenMaterialTask(row.classId, row.task.id) },
                         )
                     }
                 }
-                if (materialTasks.isNotEmpty()) {
-                    item { SectionTitle("材料登记") }
-                    items(materialTasks.sortedByDescending { it.second.updatedAt }, key = { "material-${it.second.id}" }) { (classId, task) ->
-                        MaterialHistoryItem(
-                            className = classNames[classId].orEmpty(), task = task,
-                            onClick = { onOpenMaterialTask(classId, task.id) },
+                if (completedRows.isNotEmpty()) item { SectionTitle("已完成") }
+                items(completedRows, key = { it.key }) { row ->
+                    when (row) {
+                        is CompletedHistoryRow.Attendance -> GlobalHistoryItem(
+                            className = classNames[row.session.classId].orEmpty(),
+                            session = row.session,
+                            titleMode = titleMode,
+                            showStatistics = showStatistics,
+                            onClick = { onOpenResult(row.session.classId, row.session.id) },
+                            onDelete = { sessionToDelete = row.session },
+                        )
+                        is CompletedHistoryRow.Materials -> MaterialHistoryItem(
+                            className = classNames[row.classId].orEmpty(), task = row.task,
+                            onClick = { onOpenMaterialTask(row.classId, row.task.id) },
                         )
                     }
-                }
-                if (sessions.isNotEmpty()) item { SectionTitle("已完成点名") }
-                items(sessions.sortedByDescending { it.createdAt }, key = { it.id }) { session ->
-                    GlobalHistoryItem(
-                        className = classNames[session.classId].orEmpty(),
-                        session = session,
-                        titleMode = titleMode,
-                        showStatistics = showStatistics,
-                        onClick = { onOpenResult(session.classId, session.id) },
-                        onDelete = { sessionToDelete = session },
-                    )
                 }
             }
         }
@@ -1760,9 +1741,9 @@ private fun MaterialHistoryItem(className: String, task: MaterialTask, onClick: 
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(task.title, style = MaterialTheme.typography.titleMedium)
-            Text("${className.ifBlank { "班级" }} · ${task.materials.size} 份材料 · 完成 $completed · 不合格 $rejected", style = MaterialTheme.typography.bodySmall)
+            Text("材料登记 · ${className.ifBlank { "班级" }} · ${task.materials.size} 份 · 完成 $completed · 不合格 $rejected", style = MaterialTheme.typography.bodySmall)
         }
-        Text(if (task.completedAt == null) "进行中" else "已完成", style = MaterialTheme.typography.labelMedium)
+        TextButton(onClick = onClick) { Text(if (task.completedAt == null) "继续" else "编辑") }
     } }
 }
 
@@ -1783,7 +1764,7 @@ private fun DraftHistoryItem(
             Column(Modifier.weight(1f)) {
                 val resolvedClassName = className.ifBlank { "已删除的班级" }
                 Text(
-                    (if (titleMode == HistoryTitleMode.CLASS_NAME) resolvedClassName else formatTime(draft.updatedAt)) + " · 草稿",
+                    (if (titleMode == HistoryTitleMode.CLASS_NAME) resolvedClassName else formatTime(draft.updatedAt)) + " · 点名草稿",
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Text(
@@ -2377,10 +2358,16 @@ private fun ClassSettingsScreen(
         mutableStateOf(group.attendanceSettings ?: globalSettings.toClassSettings())
     }
     var selector by remember { mutableStateOf<ClassSettingSelector?>(null) }
+    var page by rememberSaveable(group.id) { mutableStateOf<String?>(null) }
+    BackHandler(enabled = page != null) { page = null }
 
     Scaffold(
         topBar = {
-            SimpleBackBar("${group.name} · 设置", onBack) {
+            SimpleBackBar(
+                title = page?.let { selected -> classSettingsDestinations.flatten().first { it.key == selected }.title }
+                    ?: "${group.name} · 设置",
+                onBack = { if (page == null) onBack() else page = null },
+            ) {
                 TextButton(onClick = { onSave(draft.takeIf { customEnabled }) }) {
                     Text("保存")
                 }
@@ -2392,21 +2379,40 @@ private fun ClassSettingsScreen(
             contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 32.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item { SectionTitle("班级专属设置") }
             item {
-                SettingsGroup {
+                SettingsGroup(title = "班级专属设置", subtitle = "启用后仅覆盖这个班级支持的点名选项") {
                     SwitchSettingRow("覆盖全局点名设置", customEnabled) { enabled ->
                         customEnabled = enabled
+                        if (!enabled) page = null
                         if (enabled && group.attendanceSettings == null) {
                             draft = globalSettings.toClassSettings()
                         }
                     }
                 }
             }
-            if (customEnabled) {
-                item { SectionTitle("点名操作") }
+            if (!customEnabled) {
+                item { HintCard("当前跟随全局设置。启用后可按与全局设置相同的分类调整这个班级。") }
+            } else if (page == null) {
+                items(classSettingsDestinations) { destinations ->
+                    SettingsDestinationGroup(destinations) { page = it }
+                    Spacer(Modifier.height(8.dp))
+                }
                 item {
-                    SettingsGroup {
+                    Text(
+                        "未到原因列表、状态图标、颜色、导出内容和历史标题继续使用全局设置。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
+                    )
+                }
+            } else {
+                item {
+                    SettingsPageIntro(classSettingsDestinations.flatten().first { it.key == page })
+                }
+            }
+            if (customEnabled && page == "操作") {
+                item {
+                    SettingsGroup(title = "点名操作", subtitle = "与全局设置使用相同的操作选项") {
                         SettingRow("点按默认选择", draft.defaultStatus.label) {
                             selector = ClassSettingSelector.DEFAULT_STATUS
                         }
@@ -2428,18 +2434,39 @@ private fun ClassSettingsScreen(
                         }
                     }
                 }
-                item { SectionTitle("结果排列") }
+            }
+            if (customEnabled && page == "结果") {
                 item {
-                    SettingsGroup {
+                    SettingsGroup(title = "结果排列", subtitle = "控制本班点名结果的分组方式") {
                         SwitchSettingRow(
                             "按状态分类排列",
                             draft.groupResultsByStatus,
                         ) { draft = draft.copy(groupResultsByStatus = it) }
+                        SwitchSettingRow("显示结果统计卡", draft.showResultSummary) {
+                            draft = draft.copy(showResultSummary = it)
+                        }
+
+                        SwitchSettingRow("显示空结果分类", draft.showEmptyResultGroups) {
+                            draft = draft.copy(showEmptyResultGroups = it)
+                        }
                     }
                 }
-                item { SectionTitle("界面显示") }
                 item {
-                    SettingsGroup {
+                    SettingsGroup(title = "分类折叠", subtitle = "进入结果页时默认收起指定分类") {
+                        resultCollapseOptions.values.forEach { status ->
+                            SwitchSettingRow("默认折叠${status.label}列表", status in draft.collapsedResultStatuses) { enabled ->
+                                draft = draft.copy(
+                                    collapsedResultStatuses = if (enabled) draft.collapsedResultStatuses + status
+                                    else draft.collapsedResultStatuses - status,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            if (customEnabled && page == "显示") {
+                item {
+                    SettingsGroup(title = "点名列表", subtitle = "名单信息、操作控件与行间距") {
                         SwitchSettingRow("显示学生学号", draft.showStudentNumbers) {
                             draft = draft.copy(showStudentNumbers = it)
                         }
@@ -2467,35 +2494,8 @@ private fun ClassSettingsScreen(
                         SwitchSettingRow("未点完时二次确认", draft.confirmIncompleteAttendance) {
                             draft = draft.copy(confirmIncompleteAttendance = it)
                         }
-
-                        SwitchSettingRow("显示结果统计卡", draft.showResultSummary) {
-                            draft = draft.copy(showResultSummary = it)
-                        }
-
-                        SwitchSettingRow("显示空结果分类", draft.showEmptyResultGroups) {
-                            draft = draft.copy(showEmptyResultGroups = it)
-                        }
-                        resultCollapseOptions.values.forEach { status ->
-
-                            SwitchSettingRow("默认折叠${status.label}列表", status in draft.collapsedResultStatuses) { enabled ->
-                                draft = draft.copy(
-                                    collapsedResultStatuses = if (enabled) draft.collapsedResultStatuses + status
-                                        else draft.collapsedResultStatuses - status,
-                                )
-                            }
-                        }
                     }
                 }
-            } else {
-                item { HintCard("当前跟随全局设置。启用后，这个班级可以单独指定点按、手势、默认原因和结果排列。") }
-            }
-            item {
-                Text(
-                    "未到原因列表、状态图标、颜色、导出内容和历史标题继续使用全局设置。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
-                )
             }
         }
     }
@@ -2542,6 +2542,14 @@ private val settingsDestinations = listOf(
         SettingsDestination("导出", "文本导出", "分类明细、统计、学号与原因", Icons.Default.Save),
         SettingsDestination("历史", "历史记录", "班级名称与点名时间标题", Icons.Default.History),
         SettingsDestination("备份", "数据备份", "完整备份与恢复班级、历史和草稿", Icons.Default.FileUpload),
+    ),
+)
+
+private val classSettingsDestinations = listOf(
+    listOf(
+        SettingsDestination("操作", "点名操作", "点按默认状态、原因、长按与左右滑动", Icons.Default.Settings),
+        SettingsDestination("显示", "界面显示", "学号、进度、状态按钮与列表间距", Icons.Default.Person),
+        SettingsDestination("结果", "结果排列", "分类、统计、空分类与默认折叠", Icons.Default.Groups),
     ),
 )
 
@@ -3091,23 +3099,15 @@ private fun RollCallItem(
                     )
                 }
                 Spacer(Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(student.name, style = MaterialTheme.typography.titleMedium)
-                    val detail = listOfNotNull(
+                StudentIdentityText(
+                    student = student,
+                    detail = listOfNotNull(
                         student.studentNumber.takeIf { showStudentNumber && it.isNotBlank() },
                         mark?.status?.label,
                         mark?.reason?.takeIf { showReason && it.isNotBlank() },
-                    ).joinToString(" · ")
-                    if (detail.isNotEmpty()) {
-                        Text(
-                            detail,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
+                    ).joinToString(" · "),
+                    modifier = Modifier.weight(1f),
+                )
                 if (showStatusButton) {
                     TextButton(onClick = onEdit) { Text("状态") }
                 }
@@ -3131,56 +3131,15 @@ private fun StudentListItem(
             modifier = Modifier.fillMaxWidth().padding(16.dp, 8.dp, 8.dp, 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(student.name, style = MaterialTheme.typography.titleMedium)
-                if (showStudentNumber && student.studentNumber.isNotBlank()) {
-                    Text(
-                        student.studentNumber,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            }
+            StudentIdentityText(
+                student = student,
+                detail = student.studentNumber.takeIf { showStudentNumber }.orEmpty(),
+                modifier = Modifier.weight(1f),
+            )
             IconButton(onClick = onEdit) {
                 Icon(Icons.Default.Edit, contentDescription = "修改学生信息")
             }
             TextButton(onClick = onDelete) { Text("移除") }
-        }
-    }
-}
-
-@Composable
-private fun HistoryItem(
-    session: AttendanceSession,
-    showStatistics: Boolean,
-    onClick: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    val absent = session.entries.count { it.status == AttendanceStatus.ABSENT }
-    val leave = session.entries.count { it.status == AttendanceStatus.LEAVE }
-    val late = session.entries.count { it.status == AttendanceStatus.LATE }
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(formatTime(session.createdAt), style = MaterialTheme.typography.titleSmall)
-                if (showStatistics) {
-                    Text(
-                        "共 ${session.entries.size} 人 · 缺勤 $absent · 请假 $leave · 迟到 $late",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Default.Delete, contentDescription = "删除记录")
-            }
         }
     }
 }
@@ -3213,14 +3172,15 @@ private fun GlobalHistoryItem(
                 Text(headline, style = MaterialTheme.typography.titleMedium)
                 Text(
                     if (showStatistics) {
-                        "$detailPrefix · 到 $present · 缺勤 $absent · 不参与 $exempt"
+                        "点名 · $detailPrefix · 到 $present · 缺勤 $absent · 不参与 $exempt"
                     } else {
-                        detailPrefix
+                        "点名 · $detailPrefix"
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            TextButton(onClick = onClick) { Text("编辑") }
             IconButton(onClick = onDelete) {
                 Icon(Icons.Default.Delete, contentDescription = "删除记录")
             }
@@ -3262,19 +3222,14 @@ private fun ResultEntryItem(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalAlignment = Alignment.Top,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(entry.studentName, style = MaterialTheme.typography.titleMedium)
-                if (settings.showStudentNumbers && entry.studentNumber.isNotBlank()) {
-                    Text(
-                        entry.studentNumber,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (entry.reason.isNotBlank()) {
-                    Text("原因：${entry.reason}", modifier = Modifier.padding(top = 5.dp))
-                }
-            }
+            StudentIdentityText(
+                student = Student(entry.studentId, entry.studentName, entry.studentNumber),
+                detail = listOfNotNull(
+                    entry.studentNumber.takeIf { settings.showStudentNumbers && it.isNotBlank() },
+                    "原因：${entry.reason}".takeIf { entry.reason.isNotBlank() },
+                ).joinToString(" · "),
+                modifier = Modifier.weight(1f),
+            )
             IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
                 Icon(
                     Icons.Default.Edit,
