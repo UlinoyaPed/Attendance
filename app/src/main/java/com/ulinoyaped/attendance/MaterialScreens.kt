@@ -70,14 +70,14 @@ internal fun MaterialTasksScreen(
             contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 28.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            item { Text("任务创建后立即保存，可随时从历史返回修改登记状态。", style = MaterialTheme.typography.bodyMedium) }
+            item { Text("每次登记都是一条独立记录，创建后立即保存到历史。", style = MaterialTheme.typography.bodyMedium) }
             item { Button(onClick = { creating = true }, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("新建材料任务")
+                Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("开始一次材料登记")
             } }
             if (active.isNotEmpty()) item { MaterialSectionTitle("进行中") }
-            items(active, key = { it.id }) { task -> MaterialTaskCard(group, task, { onOpen(task.id) }, { deleting = task }) }
+            items(active, key = { it.id }) { task -> MaterialTaskCard(task, { onOpen(task.id) }, { deleting = task }) }
             if (completed.isNotEmpty()) item { MaterialSectionTitle("历史") }
-            items(completed, key = { it.id }) { task -> MaterialTaskCard(group, task, { onOpen(task.id) }, { deleting = task }) }
+            items(completed, key = { it.id }) { task -> MaterialTaskCard(task, { onOpen(task.id) }, { deleting = task }) }
             if (group.materialTasks.isEmpty()) item {
                 Text("还没有材料任务", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 24.dp))
             }
@@ -93,7 +93,7 @@ internal fun MaterialTasksScreen(
     )
     deleting?.let { task -> AlertDialog(
         onDismissRequest = { deleting = null },
-        title = { Text("删除材料任务？") },
+        title = { Text("删除材料登记？") },
         text = { Text("“${task.title}”及全部登记状态将被删除。") },
         confirmButton = { TextButton(onClick = { onDelete(task.id); deleting = null }) { Text("删除") } },
         dismissButton = { TextButton(onClick = { deleting = null }) { Text("取消") } },
@@ -101,8 +101,8 @@ internal fun MaterialTasksScreen(
 }
 
 @Composable
-private fun MaterialTaskCard(group: ClassGroup, task: MaterialTask, onOpen: () -> Unit, onDelete: () -> Unit) {
-    val total = group.students.size * task.materials.size
+private fun MaterialTaskCard(task: MaterialTask, onOpen: () -> Unit, onDelete: () -> Unit) {
+    val total = task.participants.size * task.materials.size
     val completed = task.records.count { it.status == MaterialRecordStatus.COMPLETED }
     val rejected = task.records.count { it.status == MaterialRecordStatus.REJECTED }
     Card(
@@ -123,7 +123,6 @@ private fun MaterialTaskCard(group: ClassGroup, task: MaterialTask, onOpen: () -
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun MaterialTaskScreen(
-    group: ClassGroup,
     task: MaterialTask,
     onBack: () -> Unit,
     onSetStatus: (String, String, MaterialRecordStatus) -> Unit,
@@ -136,9 +135,9 @@ internal fun MaterialTaskScreen(
         title = { Text(task.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
         actions = {
-            IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "删除任务") }
+            IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "删除登记") }
             TextButton(onClick = { onSetCompleted(task.completedAt == null) }) {
-                Text(if (task.completedAt == null) "完成" else "重新编辑")
+                Text(if (task.completedAt == null) "结束登记" else "继续编辑")
             }
         },
     ) }) { padding ->
@@ -148,7 +147,7 @@ internal fun MaterialTaskScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             item {
-                val total = group.students.size * task.materials.size
+                val total = task.participants.size * task.materials.size
                 val done = task.records.count { it.status == MaterialRecordStatus.COMPLETED }
                 val rejected = task.records.count { it.status == MaterialRecordStatus.REJECTED }
                 Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
@@ -158,7 +157,7 @@ internal fun MaterialTaskScreen(
                     }
                 }
             }
-            items(group.students, key = { it.id }) { student ->
+            items(task.participants, key = { it.id }) { student ->
                 Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(student.name, style = MaterialTheme.typography.titleMedium)
@@ -185,7 +184,7 @@ internal fun MaterialTaskScreen(
     }
     if (confirmDelete) AlertDialog(
         onDismissRequest = { confirmDelete = false },
-        title = { Text("删除材料任务？") },
+        title = { Text("删除材料登记？") },
         text = { Text("“${task.title}”及全部登记状态将被删除。") },
         confirmButton = { TextButton(onClick = onDelete) { Text("删除") } },
         dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } },
@@ -203,22 +202,22 @@ private fun RowScope.MaterialStatusChip(label: String, selected: Boolean, onClic
 }
 
 @Composable
-private fun MaterialTaskCreateDialog(onDismiss: () -> Unit, onConfirm: (String, List<String>) -> Unit) {
+internal fun MaterialTaskCreateDialog(onDismiss: () -> Unit, onConfirm: (String, List<String>) -> Unit) {
     var title by remember { mutableStateOf("") }
     var materials by remember { mutableStateOf("") }
     val names = materials.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.distinct().toList()
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("新建材料任务") },
+        title = { Text("开始材料登记") },
         text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedTextField(title, { title = safeMaterialText(it, 120) }, label = { Text("任务名称") }, singleLine = true)
+            OutlinedTextField(title, { title = safeMaterialText(it, 120) }, label = { Text("本次登记名称") }, singleLine = true)
             OutlinedTextField(
                 materials, { materials = safeMaterialText(it, 3000, allowNewline = true) },
                 label = { Text("材料名称，每行一份") }, minLines = 4, maxLines = 8,
                 supportingText = { Text("已填写 ${names.size} 份") },
             )
         } },
-        confirmButton = { TextButton(onClick = { onConfirm(title.trim(), names) }, enabled = title.isNotBlank() && names.isNotEmpty() && names.size <= 20) { Text("创建") } },
+        confirmButton = { TextButton(onClick = { onConfirm(title.trim(), names) }, enabled = title.isNotBlank() && names.isNotEmpty() && names.size <= 20) { Text("开始") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
 }

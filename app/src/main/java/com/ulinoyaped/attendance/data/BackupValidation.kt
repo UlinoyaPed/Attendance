@@ -32,6 +32,7 @@ fun validateBackup(root: JSONObject) {
             }
             val choices = when {
                 key in listOf("longPressAction", "swipeLeftAction", "swipeRightAction") -> GestureAction.entries.map { it.name }
+                key == "profileIcon" -> ProfileIconOption.entries.map { it.name }
                 key.endsWith("Icon") -> StatusIconOption.entries.map { it.name }
                 key.endsWith("Color") -> StatusColorOption.entries.map { it.name }
                 key == "historyTitleMode" -> HistoryTitleMode.entries.map { it.name }
@@ -86,6 +87,17 @@ fun validateBackup(root: JSONObject) {
             val materialIds = unique(materials, "id", 20)
             require(materials.length() > 0) { "材料任务不能为空" }
             for (k in 0 until materials.length()) field(materials.getJSONObject(k), "name")
+            val participants = task.optJSONArray("participants")
+            val participantIds = if (participants == null) {
+                rosterIds.getValue(group.getString("id"))
+            } else {
+                unique(participants, "id", MAX_STUDENTS).also {
+                    for (k in 0 until participants.length()) {
+                        field(participants.getJSONObject(k), "name")
+                        field(participants.getJSONObject(k), "studentNumber", required = false)
+                    }
+                }
+            }
             val records = task.optJSONArray("records") ?: JSONArray()
             require(records.length() <= 20_000 && records.length() <= MAX_STUDENTS * materials.length()) { "材料登记数量超限" }
             val recordKeys = mutableSetOf<String>()
@@ -93,7 +105,7 @@ fun validateBackup(root: JSONObject) {
                 val record = records.getJSONObject(k)
                 val studentId = field(record, "studentId")
                 val materialId = field(record, "materialId")
-                require(studentId in rosterIds.getValue(group.getString("id")) && materialId in materialIds) { "材料登记引用无效" }
+                require(studentId in participantIds && materialId in materialIds) { "材料登记引用无效" }
                 require(recordKeys.add("$studentId\u0000$materialId")) { "材料登记重复" }
                 require(record.getString("status") in MaterialRecordStatus.entries.map { it.name }) { "材料登记状态无效" }
             }

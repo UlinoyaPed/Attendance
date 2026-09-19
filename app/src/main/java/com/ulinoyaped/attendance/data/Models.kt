@@ -39,6 +39,7 @@ data class MaterialTask(
     val updatedAt: Long,
     val completedAt: Long? = null,
     val materials: List<MaterialItem>,
+    val participants: List<Student>,
     val records: List<MaterialRecord> = emptyList(),
 )
 
@@ -106,6 +107,13 @@ enum class StatusIconOption(val label: String) {
     STAR("星标"),
     HELP("问号"),
     REMOVE("减号"),
+}
+
+enum class ProfileIconOption(val label: String) {
+    PERSON("人物"),
+    SCHOOL("校园"),
+    GROUPS("班级"),
+    STAR("星标"),
 }
 
 enum class StatusColorOption(val label: String) {
@@ -176,6 +184,7 @@ val resultCollapseOptions: Map<DisplayOption, AttendanceStatus> = linkedMapOf(
 )
 
 data class AppSettings(
+    val profileIcon: ProfileIconOption = ProfileIconOption.PERSON,
     val collapsedResultStatuses: Set<AttendanceStatus> = emptySet(),
     val absenceReasons: List<String> = listOf("病假", "事假", "公假", "早退", "其他"),
     val defaultReason: String = "",

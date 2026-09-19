@@ -152,6 +152,7 @@ import com.ulinoyaped.attendance.data.HistoryTitleMode
 import com.ulinoyaped.attendance.data.DisplayOption
 import com.ulinoyaped.attendance.data.StatusColorOption
 import com.ulinoyaped.attendance.data.StatusIconOption
+import com.ulinoyaped.attendance.data.ProfileIconOption
 import com.ulinoyaped.attendance.data.Student
 import com.ulinoyaped.attendance.data.iconFor
 import com.ulinoyaped.attendance.data.colorFor
@@ -166,11 +167,17 @@ import kotlin.math.abs
 
 private sealed interface Screen {
     data class Root(val tab: RootTab) : Screen
-    data class ClassDetail(val classId: String) : Screen
-    data class ClassSettings(val classId: String) : Screen
-    data class Situations(val classId: String) : Screen
-    data class Materials(val classId: String) : Screen
-    data class MaterialTaskDetail(val classId: String, val taskId: String, val fromHistory: Boolean = false) : Screen
+    data class ClassActions(val classId: String) : Screen
+    data class ClassDetail(val classId: String, val backToActions: Boolean = false) : Screen
+    data class ClassSettings(val classId: String, val backToActions: Boolean = false) : Screen
+    data class Situations(val classId: String, val backToActions: Boolean = false) : Screen
+    data class Materials(val classId: String, val backToActions: Boolean = false) : Screen
+    data class MaterialTaskDetail(
+        val classId: String,
+        val taskId: String,
+        val backTarget: MaterialBackTarget = MaterialBackTarget.CLASS_ACTIONS,
+        val managementBackToActions: Boolean = false,
+    ) : Screen
     data class RollCall(
         val classId: String,
         val draftId: String,
@@ -186,7 +193,14 @@ private sealed interface Screen {
 
 private enum class ResultBackTarget {
     CLASSES,
+    CLASS_ACTIONS,
     CLASS_DETAIL,
+    HISTORY,
+}
+
+private enum class MaterialBackTarget {
+    CLASS_ACTIONS,
+    MATERIALS,
     HISTORY,
 }
 
@@ -217,6 +231,7 @@ private enum class SettingSelector {
     COLOR_LEAVE,
     COLOR_ABSENT,
     COLOR_EXEMPT,
+    PROFILE_ICON,
     HISTORY_TITLE,
 }
 
@@ -247,18 +262,25 @@ fun AttendanceApp() {
     BackHandler(enabled = backTarget !is Screen.Root || backTarget.tab != RootTab.CLASSES) {
         screen = when (val current = screen) {
             is Screen.Root -> Screen.Root(RootTab.CLASSES)
-            is Screen.ClassDetail -> Screen.Root(RootTab.CLASSES)
-            is Screen.ClassSettings -> Screen.ClassDetail(current.classId)
-            is Screen.Situations -> Screen.ClassDetail(current.classId)
-            is Screen.Materials -> Screen.ClassDetail(current.classId)
-            is Screen.MaterialTaskDetail -> if (current.fromHistory) Screen.Root(RootTab.HISTORY) else Screen.Materials(current.classId)
+            is Screen.ClassActions -> Screen.Root(RootTab.CLASSES)
+            is Screen.ClassDetail -> if (current.backToActions) Screen.ClassActions(current.classId) else Screen.Root(RootTab.CLASSES)
+            is Screen.ClassSettings -> Screen.ClassDetail(current.classId, current.backToActions)
+            is Screen.Situations -> Screen.ClassDetail(current.classId, current.backToActions)
+            is Screen.Materials -> Screen.ClassDetail(current.classId, current.backToActions)
+            is Screen.MaterialTaskDetail -> when (current.backTarget) {
+                MaterialBackTarget.CLASS_ACTIONS -> Screen.ClassActions(current.classId)
+                MaterialBackTarget.MATERIALS -> Screen.Materials(current.classId, current.managementBackToActions)
+                MaterialBackTarget.HISTORY -> Screen.Root(RootTab.HISTORY)
+            }
             is Screen.RollCall -> when (current.backTarget) {
                 ResultBackTarget.CLASS_DETAIL -> Screen.ClassDetail(current.classId)
+                ResultBackTarget.CLASS_ACTIONS -> Screen.ClassActions(current.classId)
                 ResultBackTarget.HISTORY -> Screen.Root(RootTab.HISTORY)
                 ResultBackTarget.CLASSES -> Screen.Root(RootTab.CLASSES)
             }
             is Screen.Result -> when (current.backTarget) {
                 ResultBackTarget.CLASSES -> Screen.Root(RootTab.CLASSES)
+                ResultBackTarget.CLASS_ACTIONS -> Screen.ClassActions(current.classId)
                 ResultBackTarget.CLASS_DETAIL -> Screen.ClassDetail(current.classId)
                 ResultBackTarget.HISTORY -> Screen.Root(RootTab.HISTORY)
             }
@@ -287,10 +309,7 @@ fun AttendanceApp() {
             settings = settings,
             onSelectTab = { screen = Screen.Root(it) },
             onAddClass = repository::addClass,
-            onStartClass = { classId ->
-                val draft = repository.createRollCallDraft(classId)
-                screen = Screen.RollCall(classId, draft.id, draft.createdAt)
-            },
+            onOpenClass = { screen = Screen.ClassActions(it) },
             onEditClass = { screen = Screen.ClassDetail(it) },
             onDeleteClass = repository::deleteClass,
             onOpenResult = { classId, sessionId ->
@@ -302,7 +321,10 @@ fun AttendanceApp() {
                 if (draft != null) screen = Screen.RollCall(classId, draftId, draft.createdAt, ResultBackTarget.HISTORY)
             },
             onDeleteDraft = repository::deleteRollCallDraft,
-            onOpenMaterialTask = { classId, taskId -> screen = Screen.MaterialTaskDetail(classId, taskId, fromHistory = true) },
+            onOpenMaterialTask = { classId, taskId ->
+                screen = Screen.MaterialTaskDetail(classId, taskId, MaterialBackTarget.HISTORY)
+            },
+            onSetProfileIcon = repository::setProfileIcon,
             onAddReason = repository::addAbsenceReason,
             onRemoveReason = repository::removeAbsenceReason,
             onMoveReason = repository::moveAbsenceReason,
@@ -325,6 +347,25 @@ fun AttendanceApp() {
             onSetExportReason = repository::setExportReason,
         )
 
+        is Screen.ClassActions -> {
+            val group = classes.firstOrNull { it.id == current.classId }
+            if (group == null) screen = Screen.Root(RootTab.CLASSES) else ClassActionScreen(
+                group = group,
+                profileIcon = settings.profileIcon,
+                onBack = { screen = Screen.Root(RootTab.CLASSES) },
+                onStartAttendance = {
+                    val draft = repository.createRollCallDraft(group.id)
+                    screen = Screen.RollCall(group.id, draft.id, draft.createdAt, ResultBackTarget.CLASS_ACTIONS)
+                },
+                onStartMaterials = { title, materials ->
+                    val taskId = repository.createMaterialTask(group.id, title, materials)
+                    screen = Screen.MaterialTaskDetail(group.id, taskId, MaterialBackTarget.CLASS_ACTIONS)
+                },
+                onManageClass = { screen = Screen.ClassDetail(group.id, backToActions = true) },
+                onOpenSettings = { screen = Screen.Root(RootTab.SETTINGS) },
+            )
+        }
+
         is Screen.ClassDetail -> {
             val group = classes.firstOrNull { it.id == current.classId }
             if (group == null) {
@@ -334,7 +375,9 @@ fun AttendanceApp() {
                     group = group,
                     settings = settings,
                     sessions = sessions.filter { it.classId == group.id },
-                    onBack = { screen = Screen.Root(RootTab.CLASSES) },
+                    onBack = {
+                        screen = if (current.backToActions) Screen.ClassActions(group.id) else Screen.Root(RootTab.CLASSES)
+                    },
                     onAddStudent = { name, number -> repository.addStudent(group.id, name, number) },
                     onRemoveStudent = { repository.removeStudent(group.id, it) },
                     onImport = { repository.importStudents(group.id, it) },
@@ -344,9 +387,9 @@ fun AttendanceApp() {
                     },
                     onOpenResult = { screen = Screen.Result(group.id, it) },
                     onDeleteSession = repository::deleteSession,
-                    onOpenSettings = { screen = Screen.ClassSettings(group.id) },
-                    onOpenSituations = { screen = Screen.Situations(group.id) },
-                    onOpenMaterials = { screen = Screen.Materials(group.id) },
+                    onOpenSettings = { screen = Screen.ClassSettings(group.id, current.backToActions) },
+                    onOpenSituations = { screen = Screen.Situations(group.id, current.backToActions) },
+                    onOpenMaterials = { screen = Screen.Materials(group.id, current.backToActions) },
                     onRenameClass = { repository.renameClass(group.id, it) },
                     onUpdateStudent = { studentId, name, number ->
                         repository.updateStudent(group.id, studentId, name, number)
@@ -363,10 +406,10 @@ fun AttendanceApp() {
                 ClassSettingsScreen(
                     group = group,
                     globalSettings = settings,
-                    onBack = { screen = Screen.ClassDetail(group.id) },
+                    onBack = { screen = Screen.ClassDetail(group.id, current.backToActions) },
                     onSave = {
                         repository.setClassAttendanceSettings(group.id, it)
-                        screen = Screen.ClassDetail(group.id)
+                        screen = Screen.ClassDetail(group.id, current.backToActions)
                     },
                 )
             }
@@ -376,7 +419,7 @@ fun AttendanceApp() {
             val group = classes.firstOrNull { it.id == current.classId }
             if (group == null) screen = Screen.Root(RootTab.CLASSES) else SituationScreen(
                 group = group,
-                onBack = { screen = Screen.ClassDetail(group.id) },
+                onBack = { screen = Screen.ClassDetail(group.id, current.backToActions) },
                 onAdd = { repository.addSituation(group.id, it) },
                 onRename = { id, name -> repository.renameSituation(group.id, id, name) },
                 onDelete = { repository.deleteSituation(group.id, it) },
@@ -393,9 +436,13 @@ fun AttendanceApp() {
             val group = classes.firstOrNull { it.id == current.classId }
             if (group == null) screen = Screen.Root(RootTab.CLASSES) else MaterialTasksScreen(
                 group = group,
-                onBack = { screen = Screen.ClassDetail(group.id) },
+                onBack = { screen = Screen.ClassDetail(group.id, current.backToActions) },
                 onCreate = { title, materials -> repository.createMaterialTask(group.id, title, materials) },
-                onOpen = { screen = Screen.MaterialTaskDetail(group.id, it) },
+                onOpen = {
+                    screen = Screen.MaterialTaskDetail(
+                        group.id, it, MaterialBackTarget.MATERIALS, current.backToActions,
+                    )
+                },
                 onDelete = { repository.deleteMaterialTask(group.id, it) },
             )
         }
@@ -404,16 +451,25 @@ fun AttendanceApp() {
             val group = classes.firstOrNull { it.id == current.classId }
             val task = group?.materialTasks?.firstOrNull { it.id == current.taskId }
             if (group == null || task == null) screen = Screen.Root(RootTab.HISTORY) else MaterialTaskScreen(
-                group = group,
                 task = task,
-                onBack = { screen = if (current.fromHistory) Screen.Root(RootTab.HISTORY) else Screen.Materials(group.id) },
+                onBack = {
+                    screen = when (current.backTarget) {
+                        MaterialBackTarget.CLASS_ACTIONS -> Screen.ClassActions(group.id)
+                        MaterialBackTarget.MATERIALS -> Screen.Materials(group.id, current.managementBackToActions)
+                        MaterialBackTarget.HISTORY -> Screen.Root(RootTab.HISTORY)
+                    }
+                },
                 onSetStatus = { studentId, materialId, status ->
                     repository.setMaterialRecord(group.id, task.id, studentId, materialId, status)
                 },
                 onSetCompleted = { repository.setMaterialTaskCompleted(group.id, task.id, it) },
                 onDelete = {
                     repository.deleteMaterialTask(group.id, task.id)
-                    screen = if (current.fromHistory) Screen.Root(RootTab.HISTORY) else Screen.Materials(group.id)
+                    screen = when (current.backTarget) {
+                        MaterialBackTarget.CLASS_ACTIONS -> Screen.ClassActions(group.id)
+                        MaterialBackTarget.MATERIALS -> Screen.Materials(group.id, current.managementBackToActions)
+                        MaterialBackTarget.HISTORY -> Screen.Root(RootTab.HISTORY)
+                    }
                 },
             )
         }
@@ -432,6 +488,7 @@ fun AttendanceApp() {
                     onBack = {
                         screen = when (current.backTarget) {
                             ResultBackTarget.CLASS_DETAIL -> Screen.ClassDetail(group.id)
+                            ResultBackTarget.CLASS_ACTIONS -> Screen.ClassActions(group.id)
                             ResultBackTarget.HISTORY -> Screen.Root(RootTab.HISTORY)
                             ResultBackTarget.CLASSES -> Screen.Root(RootTab.CLASSES)
                         }
@@ -465,6 +522,7 @@ fun AttendanceApp() {
                     onBack = {
                         screen = when (current.backTarget) {
                             ResultBackTarget.CLASSES -> Screen.Root(RootTab.CLASSES)
+                            ResultBackTarget.CLASS_ACTIONS -> Screen.ClassActions(group.id)
                             ResultBackTarget.CLASS_DETAIL -> Screen.ClassDetail(group.id)
                             ResultBackTarget.HISTORY -> Screen.Root(RootTab.HISTORY)
                         }
@@ -477,8 +535,8 @@ fun AttendanceApp() {
 
 private fun screenDepth(screen: Screen): Int = when (screen) {
     is Screen.Root -> 0
-    is Screen.ClassDetail -> 1
-    is Screen.ClassSettings, is Screen.Situations, is Screen.Materials, is Screen.RollCall -> 2
+    is Screen.ClassActions -> 1
+    is Screen.ClassDetail, is Screen.ClassSettings, is Screen.Situations, is Screen.Materials, is Screen.RollCall -> 2
     is Screen.Result, is Screen.MaterialTaskDetail -> 3
 }
 
@@ -491,7 +549,7 @@ private fun RootScreen(
     settings: AppSettings,
     onSelectTab: (RootTab) -> Unit,
     onAddClass: (String) -> Unit,
-    onStartClass: (String) -> Unit,
+    onOpenClass: (String) -> Unit,
     onEditClass: (String) -> Unit,
     onDeleteClass: (String) -> Unit,
     onOpenResult: (String, String) -> Unit,
@@ -499,6 +557,7 @@ private fun RootScreen(
     onContinueDraft: (String, String) -> Unit,
     onDeleteDraft: (String) -> Unit,
     onOpenMaterialTask: (String, String) -> Unit,
+    onSetProfileIcon: (ProfileIconOption) -> Unit,
     onAddReason: (String) -> Unit,
     onRemoveReason: (String) -> Unit,
     onMoveReason: (Int, Int) -> Unit,
@@ -528,9 +587,10 @@ private fun RootScreen(
             classes = classes,
             settings = settings,
             onAddClass = onAddClass,
-            onStartClass = onStartClass,
+            onOpenClass = onOpenClass,
             onEditClass = onEditClass,
             onDeleteClass = onDeleteClass,
+            onOpenSettings = { onSelectTab(RootTab.SETTINGS) },
             bottomBar = bottomBar,
         )
         RootTab.HISTORY -> HistoryScreen(
@@ -548,6 +608,7 @@ private fun RootScreen(
         )
         RootTab.SETTINGS -> SettingsScreen(
             settings = settings,
+            onSetProfileIcon = onSetProfileIcon,
             onAddReason = onAddReason,
             onRemoveReason = onRemoveReason,
             onMoveReason = onMoveReason,
@@ -597,9 +658,13 @@ private fun RootNavigationBar(selectedTab: RootTab, onSelectTab: (RootTab) -> Un
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RootLargeTopBar(title: String) {
+private fun RootLargeTopBar(
+    title: String,
+    actions: @Composable RowScope.() -> Unit = {},
+) {
     LargeTopAppBar(
         title = { Text(title, fontWeight = FontWeight.SemiBold) },
+        actions = actions,
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = Color.Transparent,
             scrolledContainerColor = Color.Transparent,
@@ -613,9 +678,10 @@ private fun ClassesScreen(
     classes: List<ClassGroup>,
     settings: AppSettings,
     onAddClass: (String) -> Unit,
-    onStartClass: (String) -> Unit,
+    onOpenClass: (String) -> Unit,
     onEditClass: (String) -> Unit,
     onDeleteClass: (String) -> Unit,
+    onOpenSettings: () -> Unit,
     bottomBar: @Composable () -> Unit,
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
@@ -623,7 +689,11 @@ private fun ClassesScreen(
     var classToDelete by remember { mutableStateOf<ClassGroup?>(null) }
 
     Scaffold(
-        topBar = { RootLargeTopBar("我的班级") },
+        topBar = {
+            RootLargeTopBar("我的班级") {
+                ProfileAvatarButton(settings.profileIcon, onOpenSettings)
+            }
+        },
         bottomBar = bottomBar,
         floatingActionButton = {
             FloatingActionButton(onClick = { showAddDialog = true }) {
@@ -646,7 +716,7 @@ private fun ClassesScreen(
                 if (settings.showClassOperationHint) {
                     item {
                         Text(
-                            "轻点班级立即开始点名，长按可编辑班级",
+                            "轻点班级选择点名或材料登记，长按可编辑班级",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
@@ -658,7 +728,7 @@ private fun ClassesScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .combinedClickable(
-                                onClick = { onStartClass(group.id) },
+                                onClick = { onOpenClass(group.id) },
                                 onLongClick = { classToManage = group },
                             ),
                         shape = RoundedCornerShape(20.dp),
@@ -692,7 +762,7 @@ private fun ClassesScreen(
                                 )
                                 if (settings.showClassStudentCount) {
                                     Text(
-                                        "${group.students.size} 名学生 · 点击开始",
+                                        "${group.students.size} 名学生 · 选择本次工作",
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
@@ -705,8 +775,8 @@ private fun ClassesScreen(
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
-                                        Icons.Default.PlayArrow,
-                                        contentDescription = "开始点名",
+                                        Icons.Default.ChevronRight,
+                                        contentDescription = "打开班级",
                                         tint = MaterialTheme.colorScheme.onPrimary,
                                     )
                                 }
@@ -923,7 +993,7 @@ private fun ClassDetailScreen(
             item {
                 OutlinedButton(onClick = onOpenMaterials, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.Inventory2, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text("材料登记 · ${group.materialTasks.size}", modifier = Modifier.padding(start = 5.dp))
+                    Text("材料登记记录 · ${group.materialTasks.size}", modifier = Modifier.padding(start = 5.dp))
                 }
             }
             item { SectionTitle("学生名单 · ${group.students.size}") }
@@ -1731,6 +1801,7 @@ private fun DraftHistoryItem(
 @Composable
 private fun SettingsScreen(
     settings: AppSettings,
+    onSetProfileIcon: (ProfileIconOption) -> Unit,
     onAddReason: (String) -> Unit,
     onRemoveReason: (String) -> Unit,
     onMoveReason: (Int, Int) -> Unit,
@@ -2034,7 +2105,16 @@ private fun SettingsScreen(
                         }
                         if (displayedPage == "外观") {
                             item {
-                                SettingsGroup {
+                                SettingsGroup(title = "应用头像", subtitle = "显示在班级首页与功能页右上角") {
+                                    SettingRow(
+                                        title = "头像图标",
+                                        value = settings.profileIcon.label,
+                                        onClick = { selector = SettingSelector.PROFILE_ICON },
+                                    )
+                                }
+                            }
+                            item {
+                                SettingsGroup(title = "点名状态", subtitle = "分别设置状态图标与颜色") {
                                     StatusAppearanceRow(
                                         "到场", settings.presentIcon, settings.presentColor,
                                         { selector = SettingSelector.ICON_PRESENT },
@@ -2269,6 +2349,11 @@ private fun SettingsScreen(
             SettingSelector.COLOR_EXEMPT -> ColorChoiceDialog(
                 "不参与颜色", settings.exemptColor, { selector = null },
             ) { onSetStatusColor(AttendanceStatus.EXEMPT, it); selector = null }
+            SettingSelector.PROFILE_ICON -> ProfileIconChoiceDialog(
+                selected = settings.profileIcon,
+                onDismiss = { selector = null },
+                onSelect = { onSetProfileIcon(it); selector = null },
+            )
             SettingSelector.HISTORY_TITLE -> HistoryTitleChoiceDialog(
                 selected = settings.historyTitleMode,
                 onDismiss = { selector = null },
@@ -2449,7 +2534,7 @@ private val settingsDestinations = listOf(
         SettingsDestination("原因", "未到原因", "常用原因、默认选择与拖动排序", Icons.Default.EventBusy),
     ),
     listOf(
-        SettingsDestination("外观", "状态外观", "到场、请假等状态的图标与颜色", Icons.Default.Palette),
+        SettingsDestination("外观", "外观与头像", "头像、点名状态图标与颜色", Icons.Default.Palette),
         SettingsDestination("显示", "界面显示", "控件、文字、紧凑布局与默认折叠", Icons.Default.Person),
         SettingsDestination("结果", "结果排列", "按状态分类或显示完整人员列表", Icons.Default.Groups),
     ),
@@ -2749,6 +2834,33 @@ private fun IconChoiceDialog(
                     ) {
                         RadioButton(selected = option == selected, onClick = { onSelect(option) })
                         Icon(statusImageVector(option), contentDescription = null, modifier = Modifier.size(21.dp))
+                        Text(option.label, modifier = Modifier.padding(start = 10.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
+}
+
+@Composable
+private fun ProfileIconChoiceDialog(
+    selected: ProfileIconOption,
+    onDismiss: () -> Unit,
+    onSelect: (ProfileIconOption) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("头像图标") },
+        text = {
+            Column {
+                ProfileIconOption.entries.forEach { option ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable { onSelect(option) }.padding(vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = option == selected, onClick = { onSelect(option) })
+                        Icon(profileImageVector(option), contentDescription = null, modifier = Modifier.size(21.dp))
                         Text(option.label, modifier = Modifier.padding(start = 10.dp))
                     }
                 }

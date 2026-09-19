@@ -85,9 +85,6 @@ class AttendanceRepository internal constructor(private val preferences: android
                 situations = group.situations.map { situation ->
                     situation.copy(assignments = situation.assignments.filterNot { it.studentId == studentId })
                 },
-                materialTasks = group.materialTasks.map { task ->
-                    task.copy(records = task.records.filterNot { it.studentId == studentId })
-                },
             )
         }
     }
@@ -237,7 +234,7 @@ class AttendanceRepository internal constructor(private val preferences: android
 
     fun createMaterialTask(classId: String, title: String, materialNames: List<String>): String {
         val cleanTitle = title.trim()
-        requireSafeField(cleanTitle, "任务名称")
+        requireSafeField(cleanTitle, "本次登记名称")
         val names = materialNames.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
         require(names.isNotEmpty() && names.size <= 20) { "请填写 1 至 20 份材料" }
         names.forEach { requireSafeField(it, "材料名称") }
@@ -245,6 +242,7 @@ class AttendanceRepository internal constructor(private val preferences: android
         val task = MaterialTask(
             id = newId(), title = cleanTitle, createdAt = now, updatedAt = now,
             materials = names.map { MaterialItem(newId(), it) },
+            participants = _classes.value.first { it.id == classId }.students,
         )
         updateClass(classId) { group ->
             require(group.materialTasks.size < 200) { "材料任务数量已达上限" }
@@ -264,10 +262,10 @@ class AttendanceRepository internal constructor(private val preferences: android
         materialId: String,
         status: MaterialRecordStatus,
     ) = updateClass(classId) { group ->
-        require(group.students.any { it.id == studentId }) { "学生不存在" }
         require(group.materialTasks.any { it.id == taskId }) { "材料任务不存在" }
         group.copy(materialTasks = group.materialTasks.map { task ->
             if (task.id != taskId) task else {
+                require(task.participants.any { it.id == studentId }) { "本次登记中没有该学生" }
                 require(task.materials.any { it.id == materialId }) { "材料不存在" }
                 require(status == MaterialRecordStatus.PENDING || task.records.any {
                     it.studentId == studentId && it.materialId == materialId
@@ -384,6 +382,8 @@ class AttendanceRepository internal constructor(private val preferences: android
         }
         updateSettings(updated)
     }
+
+    fun setProfileIcon(icon: ProfileIconOption) = updateSettings(_settings.value.copy(profileIcon = icon))
 
     fun setStatusColor(status: AttendanceStatus, color: StatusColorOption) {
         val updated = when (status) {
@@ -531,6 +531,12 @@ class AttendanceRepository internal constructor(private val preferences: android
                                 task.materials.forEach { material -> put(JSONObject()
                                     .put("id", material.id).put("name", material.name)) }
                             })
+                            .put("participants", JSONArray().apply {
+                                task.participants.forEach { student -> put(JSONObject()
+                                    .put("id", student.id)
+                                    .put("name", student.name)
+                                    .put("studentNumber", student.studentNumber)) }
+                            })
                             .put("records", JSONArray().apply {
                                 task.records.forEach { record -> put(JSONObject()
                                     .put("studentId", record.studentId)
@@ -644,6 +650,7 @@ class AttendanceRepository internal constructor(private val preferences: android
     private fun settingsToJson(settings: AppSettings): JSONObject {
         val reasons = JSONArray().apply { settings.absenceReasons.forEach { put(it) } }
         return JSONObject()
+            .put("profileIcon", settings.profileIcon.name)
             .put("absenceReasons", reasons)
             .put("defaultReason", settings.defaultReason)
             .put("defaultStatus", settings.defaultStatus.name)
@@ -751,6 +758,16 @@ class AttendanceRepository internal constructor(private val preferences: android
                                             add(MaterialItem(material.getString("id"), material.getString("name")))
                                         }
                                     },
+                                    participants = task.optJSONArray("participants")?.let { participants -> buildList {
+                                        for (participantIndex in 0 until participants.length()) {
+                                            val participant = participants.getJSONObject(participantIndex)
+                                            add(Student(
+                                                id = participant.getString("id"),
+                                                name = participant.getString("name"),
+                                                studentNumber = participant.optString("studentNumber"),
+                                            ))
+                                        }
+                                    } } ?: students,
                                     records = buildList {
                                         for (recordIndex in 0 until records.length()) {
                                             val record = records.getJSONObject(recordIndex)
@@ -851,6 +868,7 @@ class AttendanceRepository internal constructor(private val preferences: android
         }
         require(!json.has("defaultStatus") || json.getString("defaultStatus") in AttendanceStatus.entries.filter { it != AttendanceStatus.UNMARKED }.map { it.name })
         return defaults.copy(
+            profileIcon = enumValueOrDefault(json.optString("profileIcon"), defaults.profileIcon),
             absenceReasons = reasons.distinct(),
             defaultReason = json.optString("defaultReason").takeIf { it in reasons }.orEmpty(),
             defaultStatus = enumValueOrDefault(json.optString("defaultStatus"), defaults.defaultStatus),

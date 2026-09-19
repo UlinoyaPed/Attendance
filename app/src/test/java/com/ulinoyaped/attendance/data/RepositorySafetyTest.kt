@@ -173,5 +173,9 @@ class RepositorySafetyTest {
         val saved = repository.classes.value.single().materialTasks.single()
         assertEquals(setOf(MaterialRecordStatus.COMPLETED, MaterialRecordStatus.REJECTED), saved.records.map { it.status }.toSet())
         assertNotNull(saved.completedAt)
+        repository.removeStudent(classId, studentId)
+        val historical = repository.classes.value.single().materialTasks.single()
+        assertEquals("Alice", historical.participants.single().name)
+        assertEquals(2, historical.records.size)
     }
 }
