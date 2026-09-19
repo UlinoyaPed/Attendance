@@ -12,6 +12,34 @@ data class ClassGroup(
     val students: List<Student> = emptyList(),
     val attendanceSettings: ClassAttendanceSettings? = null,
     val situations: List<ClassSituation> = emptyList(),
+    val materialTasks: List<MaterialTask> = emptyList(),
+)
+
+enum class MaterialRecordStatus {
+    PENDING,
+    COMPLETED,
+    REJECTED,
+}
+
+data class MaterialItem(
+    val id: String,
+    val name: String,
+)
+
+data class MaterialRecord(
+    val studentId: String,
+    val materialId: String,
+    val status: MaterialRecordStatus,
+)
+
+data class MaterialTask(
+    val id: String,
+    val title: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val completedAt: Long? = null,
+    val materials: List<MaterialItem>,
+    val records: List<MaterialRecord> = emptyList(),
 )
 
 data class SituationAssignment(

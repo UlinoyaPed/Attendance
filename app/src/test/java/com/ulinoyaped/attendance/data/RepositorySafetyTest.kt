@@ -148,4 +148,30 @@ class RepositorySafetyTest {
         repository.saveSession(classId, entries, "draft-1")
         assertEquals(listOf("draft-2"), repository.drafts.value.map { it.id })
     }
+
+    @Test fun emptyDraftIsSavedImmediatelyAndClearKeepsHistoryEntry() {
+        val repository = AttendanceRepository(Store().preferences)
+        repository.addClass("Demo")
+        val classId = repository.classes.value.single().id
+        val draft = repository.createRollCallDraft(classId)
+        assertEquals(draft.id, repository.drafts.value.single().id)
+        repository.saveRollCallDraft(draft.id, classId, draft.createdAt, emptyList())
+        assertTrue(repository.drafts.value.single().entries.isEmpty())
+    }
+
+    @Test fun materialTaskTracksEachStudentAndMaterialIndependently() {
+        val repository = AttendanceRepository(Store().preferences)
+        repository.addClass("Demo")
+        val classId = repository.classes.value.single().id
+        repository.addStudent(classId, "Alice", "001")
+        val studentId = repository.classes.value.single().students.single().id
+        val taskId = repository.createMaterialTask(classId, "开学材料", listOf("照片", "登记表"))
+        val task = repository.classes.value.single().materialTasks.single()
+        repository.setMaterialRecord(classId, taskId, studentId, task.materials[0].id, MaterialRecordStatus.COMPLETED)
+        repository.setMaterialRecord(classId, taskId, studentId, task.materials[1].id, MaterialRecordStatus.REJECTED)
+        repository.setMaterialTaskCompleted(classId, taskId, true)
+        val saved = repository.classes.value.single().materialTasks.single()
+        assertEquals(setOf(MaterialRecordStatus.COMPLETED, MaterialRecordStatus.REJECTED), saved.records.map { it.status }.toSet())
+        assertNotNull(saved.completedAt)
+    }
 }

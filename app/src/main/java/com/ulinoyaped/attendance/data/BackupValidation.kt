@@ -74,6 +74,30 @@ fun validateBackup(root: JSONObject) {
                 field(assignment, "reason", 240, false)
             }
         }
+        val materialTasks = group.optJSONArray("materialTasks") ?: JSONArray()
+        unique(materialTasks, "id", 200)
+        for (j in 0 until materialTasks.length()) {
+            val task = materialTasks.getJSONObject(j)
+            field(task, "title")
+            val createdAt = task.getLong("createdAt")
+            require(createdAt > 0 && task.getLong("updatedAt") >= createdAt) { "材料任务时间无效" }
+            if (!task.isNull("completedAt")) require(task.getLong("completedAt") >= createdAt) { "材料任务完成时间无效" }
+            val materials = task.getJSONArray("materials")
+            val materialIds = unique(materials, "id", 20)
+            require(materials.length() > 0) { "材料任务不能为空" }
+            for (k in 0 until materials.length()) field(materials.getJSONObject(k), "name")
+            val records = task.optJSONArray("records") ?: JSONArray()
+            require(records.length() <= 20_000 && records.length() <= MAX_STUDENTS * materials.length()) { "材料登记数量超限" }
+            val recordKeys = mutableSetOf<String>()
+            for (k in 0 until records.length()) {
+                val record = records.getJSONObject(k)
+                val studentId = field(record, "studentId")
+                val materialId = field(record, "materialId")
+                require(studentId in rosterIds.getValue(group.getString("id")) && materialId in materialIds) { "材料登记引用无效" }
+                require(recordKeys.add("$studentId\u0000$materialId")) { "材料登记重复" }
+                require(record.getString("status") in MaterialRecordStatus.entries.map { it.name }) { "材料登记状态无效" }
+            }
+        }
         group.optJSONObject("attendanceSettings")?.let(::settings)
     }
     fun entries(obj: JSONObject, draft: Boolean) {

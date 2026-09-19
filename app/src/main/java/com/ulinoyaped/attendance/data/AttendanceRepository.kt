@@ -85,6 +85,9 @@ class AttendanceRepository internal constructor(private val preferences: android
                 situations = group.situations.map { situation ->
                     situation.copy(assignments = situation.assignments.filterNot { it.studentId == studentId })
                 },
+                materialTasks = group.materialTasks.map { task ->
+                    task.copy(records = task.records.filterNot { it.studentId == studentId })
+                },
             )
         }
     }
@@ -144,7 +147,15 @@ class AttendanceRepository internal constructor(private val preferences: android
 
     fun getRollCallDraft(draftId: String): RollCallDraft? = _drafts.value.firstOrNull { it.id == draftId }
 
-    fun newDraftId(): String = newId()
+    fun createRollCallDraft(classId: String): RollCallDraft {
+        require(_classes.value.any { it.id == classId }) { "班级不存在" }
+        require(_drafts.value.size < 1000) { "草稿数量已达上限" }
+        val now = System.currentTimeMillis()
+        val draft = RollCallDraft(newId(), classId, now, now, emptyList())
+        _drafts.value = listOf(draft) + _drafts.value
+        saveRollCallDrafts()
+        return draft
+    }
 
     fun saveRollCallDraft(draftId: String, classId: String, createdAt: Long, entries: List<AttendanceEntry>) {
         requireSafeField(draftId, "草稿 ID")
@@ -160,12 +171,8 @@ class AttendanceRepository internal constructor(private val preferences: android
         }
         require(_drafts.value.any { it.id == draftId } || _drafts.value.size < 1000) { "草稿数量已达上限" }
         val now = System.currentTimeMillis()
-        _drafts.value = if (entries.isEmpty()) {
-            _drafts.value.filterNot { it.id == draftId }
-        } else {
-            val draft = RollCallDraft(draftId, classId, createdAt, now, entries)
-            listOf(draft) + _drafts.value.filterNot { it.id == draftId }
-        }
+        val draft = RollCallDraft(draftId, classId, createdAt, now, entries)
+        _drafts.value = listOf(draft) + _drafts.value.filterNot { it.id == draftId }
         saveRollCallDrafts()
     }
 
@@ -225,6 +232,64 @@ class AttendanceRepository internal constructor(private val preferences: android
             if (situation.id == situationId) situation.copy(
                 assignments = situation.assignments.filterNot { it.studentId == studentId },
             ) else situation
+        })
+    }
+
+    fun createMaterialTask(classId: String, title: String, materialNames: List<String>): String {
+        val cleanTitle = title.trim()
+        requireSafeField(cleanTitle, "任务名称")
+        val names = materialNames.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        require(names.isNotEmpty() && names.size <= 20) { "请填写 1 至 20 份材料" }
+        names.forEach { requireSafeField(it, "材料名称") }
+        val now = System.currentTimeMillis()
+        val task = MaterialTask(
+            id = newId(), title = cleanTitle, createdAt = now, updatedAt = now,
+            materials = names.map { MaterialItem(newId(), it) },
+        )
+        updateClass(classId) { group ->
+            require(group.materialTasks.size < 200) { "材料任务数量已达上限" }
+            group.copy(materialTasks = listOf(task) + group.materialTasks)
+        }
+        return task.id
+    }
+
+    fun deleteMaterialTask(classId: String, taskId: String) = updateClass(classId) { group ->
+        group.copy(materialTasks = group.materialTasks.filterNot { it.id == taskId })
+    }
+
+    fun setMaterialRecord(
+        classId: String,
+        taskId: String,
+        studentId: String,
+        materialId: String,
+        status: MaterialRecordStatus,
+    ) = updateClass(classId) { group ->
+        require(group.students.any { it.id == studentId }) { "学生不存在" }
+        require(group.materialTasks.any { it.id == taskId }) { "材料任务不存在" }
+        group.copy(materialTasks = group.materialTasks.map { task ->
+            if (task.id != taskId) task else {
+                require(task.materials.any { it.id == materialId }) { "材料不存在" }
+                require(status == MaterialRecordStatus.PENDING || task.records.any {
+                    it.studentId == studentId && it.materialId == materialId
+                } || task.records.size < 20_000) { "材料登记数量已达上限" }
+                task.copy(
+                    updatedAt = System.currentTimeMillis(),
+                    records = task.records.filterNot {
+                        it.studentId == studentId && it.materialId == materialId
+                    }.let { remaining ->
+                        if (status == MaterialRecordStatus.PENDING) remaining
+                        else remaining + MaterialRecord(studentId, materialId, status)
+                    },
+                )
+            }
+        })
+    }
+
+    fun setMaterialTaskCompleted(classId: String, taskId: String, completed: Boolean) = updateClass(classId) { group ->
+        require(group.materialTasks.any { it.id == taskId }) { "材料任务不存在" }
+        val now = System.currentTimeMillis()
+        group.copy(materialTasks = group.materialTasks.map { task ->
+            if (task.id == taskId) task.copy(updatedAt = now, completedAt = now.takeIf { completed }) else task
         })
     }
 
@@ -454,6 +519,24 @@ class AttendanceRepository internal constructor(private val preferences: android
                                     .put("status", assignment.status.name)
                                     .put("reason", assignment.reason)) }
                             })) }
+                    })
+                    .put("materialTasks", JSONArray().apply {
+                        group.materialTasks.forEach { task -> put(JSONObject()
+                            .put("id", task.id)
+                            .put("title", task.title)
+                            .put("createdAt", task.createdAt)
+                            .put("updatedAt", task.updatedAt)
+                            .put("completedAt", task.completedAt ?: JSONObject.NULL)
+                            .put("materials", JSONArray().apply {
+                                task.materials.forEach { material -> put(JSONObject()
+                                    .put("id", material.id).put("name", material.name)) }
+                            })
+                            .put("records", JSONArray().apply {
+                                task.records.forEach { record -> put(JSONObject()
+                                    .put("studentId", record.studentId)
+                                    .put("materialId", record.materialId)
+                                    .put("status", record.status.name)) }
+                            })) }
                     }),
             )
         }
@@ -645,6 +728,36 @@ class AttendanceRepository internal constructor(private val preferences: android
                                                 studentId = assignment.getString("studentId"),
                                                 status = AttendanceStatus.valueOf(assignment.getString("status")),
                                                 reason = assignment.optString("reason"),
+                                            ))
+                                        }
+                                    },
+                                ))
+                            }
+                        } }.orEmpty(),
+                        materialTasks = item.optJSONArray("materialTasks")?.let { tasks -> buildList {
+                            for (taskIndex in 0 until tasks.length()) {
+                                val task = tasks.getJSONObject(taskIndex)
+                                val materials = task.optJSONArray("materials") ?: JSONArray()
+                                val records = task.optJSONArray("records") ?: JSONArray()
+                                add(MaterialTask(
+                                    id = task.getString("id"),
+                                    title = task.getString("title"),
+                                    createdAt = task.getLong("createdAt"),
+                                    updatedAt = task.getLong("updatedAt"),
+                                    completedAt = if (task.isNull("completedAt")) null else task.getLong("completedAt"),
+                                    materials = buildList {
+                                        for (materialIndex in 0 until materials.length()) {
+                                            val material = materials.getJSONObject(materialIndex)
+                                            add(MaterialItem(material.getString("id"), material.getString("name")))
+                                        }
+                                    },
+                                    records = buildList {
+                                        for (recordIndex in 0 until records.length()) {
+                                            val record = records.getJSONObject(recordIndex)
+                                            add(MaterialRecord(
+                                                studentId = record.getString("studentId"),
+                                                materialId = record.getString("materialId"),
+                                                status = MaterialRecordStatus.valueOf(record.getString("status")),
                                             ))
                                         }
                                     },
