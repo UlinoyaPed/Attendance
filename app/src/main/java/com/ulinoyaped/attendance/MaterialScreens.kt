@@ -1,6 +1,7 @@
 package com.ulinoyaped.attendance
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -57,6 +58,7 @@ internal fun MaterialTaskScreen(
     task: MaterialTask,
     onBack: () -> Unit,
     onSetStatus: (String, String, MaterialRecordStatus) -> Unit,
+    onCompleteStudent: (String) -> Unit,
     onSetCompleted: (Boolean) -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -86,6 +88,7 @@ internal fun MaterialTaskScreen(
                     Column(Modifier.fillMaxWidth().padding(16.dp)) {
                         Text("${task.materials.joinToString("、") { it.name }}", style = MaterialTheme.typography.titleMedium)
                         Text("已完成 $done/$total · 不合格 $rejected", style = MaterialTheme.typography.bodyMedium)
+                        Text("点击学生头像确认该生全部材料", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
                     }
                 }
             }
@@ -105,10 +108,10 @@ internal fun MaterialTaskScreen(
                             val complete = completedForStudent == task.materials.size
                             val avatarColor = when {
                                 rejectedForStudent > 0 -> MaterialTheme.colorScheme.error
-                                complete -> MaterialTheme.colorScheme.primary
+                                complete -> materialStatusColor(MaterialRecordStatus.COMPLETED)
                                 else -> MaterialTheme.colorScheme.surfaceVariant
                             }
-                            Surface(modifier = Modifier.size(34.dp), shape = CircleShape, color = avatarColor) {
+                            Surface(onClick = { onCompleteStudent(student.id) }, modifier = Modifier.size(48.dp), shape = CircleShape, color = avatarColor) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         when {
@@ -116,8 +119,11 @@ internal fun MaterialTaskScreen(
                                             complete -> Icons.Default.CheckCircle
                                             else -> Icons.Default.Person
                                         },
-                                        contentDescription = null,
-                                        tint = if (complete || rejectedForStudent > 0) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        contentDescription = "确认${student.name}的全部材料",
+                                        tint = if (rejectedForStudent > 0) MaterialTheme.colorScheme.onError
+                                            else if (complete) {
+                                                if (isSystemInDarkTheme()) Color(0xFF143D2C) else Color.White
+                                            } else MaterialTheme.colorScheme.onSurface,
                                         modifier = Modifier.size(18.dp),
                                     )
                                 }
@@ -207,22 +213,18 @@ private fun MaterialRecordRow(
     onToggle: () -> Unit,
     onEdit: () -> Unit,
 ) {
-    val tint = when (status) {
-        MaterialRecordStatus.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
-        MaterialRecordStatus.COMPLETED -> MaterialTheme.colorScheme.primary
-        MaterialRecordStatus.REJECTED -> MaterialTheme.colorScheme.error
-    }
+    val tint = materialStatusColor(status)
     SwipeRecordContainer(
         key = recordKey,
         left = SwipeActionVisual("不合格", MaterialTheme.colorScheme.error, Icons.Default.Close),
-        right = SwipeActionVisual("已完成", MaterialTheme.colorScheme.primary, Icons.Default.CheckCircle),
+        right = SwipeActionVisual("已完成", materialStatusColor(MaterialRecordStatus.COMPLETED), Icons.Default.CheckCircle),
         onSwipeLeft = onReject,
         onSwipeRight = onComplete,
     ) { swipeModifier ->
         Surface(
             modifier = swipeModifier.fillMaxWidth().clickable(onClick = onToggle),
             shape = RoundedCornerShape(12.dp),
-            color = tint.copy(alpha = 0.10f).compositeOver(MaterialTheme.colorScheme.surfaceContainerLow),
+            color = tint.copy(alpha = if (status == MaterialRecordStatus.PENDING) 0.12f else 0.27f).compositeOver(MaterialTheme.colorScheme.surfaceContainerLow),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
@@ -246,6 +248,13 @@ private fun MaterialRecordRow(
             }
         }
     }
+}
+
+@Composable
+private fun materialStatusColor(status: MaterialRecordStatus): Color = when (status) {
+    MaterialRecordStatus.PENDING -> MaterialTheme.colorScheme.secondary
+    MaterialRecordStatus.COMPLETED -> if (isSystemInDarkTheme()) Color(0xFF80D6AC) else Color(0xFF237453)
+    MaterialRecordStatus.REJECTED -> MaterialTheme.colorScheme.error
 }
 
 private fun materialStatusLabel(status: MaterialRecordStatus): String = when (status) {

@@ -52,6 +52,9 @@ class RepositorySafetyTest {
         val sessionId = repository.saveSession(classId, listOf(original))
         val createdAt = repository.sessions.value.single().createdAt
         val draft = repository.createRollCallDraft(classId)
+        repository.addStudent(classId, "Bob", "002")
+        val bob = repository.classes.value.single().students.last()
+        repository.saveRollCallDraft(draft.id, classId, draft.createdAt, listOf(original.copy(studentId = bob.id, studentName = bob.name, studentNumber = bob.studentNumber)))
         repository.removeStudent(classId, student.id)
         repository.updateSessionEntries(sessionId, listOf(original.copy(status = AttendanceStatus.LEAVE, reason = "test")))
         assertEquals(original.copy(status = AttendanceStatus.LEAVE, reason = "test"), repository.sessions.value.single().entries.single())
@@ -175,14 +178,50 @@ class RepositorySafetyTest {
         assertEquals(listOf("draft-2"), repository.drafts.value.map { it.id })
     }
 
-    @Test fun emptyDraftIsSavedImmediatelyAndClearKeepsHistoryEntry() {
-        val repository = AttendanceRepository(Store().preferences)
+    @Test fun emptyDraftIsOmittedAndClearingDeletesIt() {
+        val store = Store()
+        val repository = AttendanceRepository(store.preferences)
         repository.addClass("Demo")
         val classId = repository.classes.value.single().id
+        repository.addStudent(classId, "Alice", "001")
+        val student = repository.classes.value.single().students.single()
         val draft = repository.createRollCallDraft(classId)
+        assertTrue(repository.drafts.value.isEmpty())
+        val entry = AttendanceEntry(student.id, student.name, student.studentNumber, AttendanceStatus.PRESENT)
+        repository.saveRollCallDraft(draft.id, classId, draft.createdAt, listOf(entry))
         assertEquals(draft.id, repository.drafts.value.single().id)
         repository.saveRollCallDraft(draft.id, classId, draft.createdAt, emptyList())
-        assertTrue(repository.drafts.value.single().entries.isEmpty())
+        assertTrue(repository.drafts.value.isEmpty())
+        assertTrue(repository.awaitSaved())
+        assertTrue(AttendanceRepository(store.preferences).drafts.value.isEmpty())
+        repository.saveRollCallDraft(draft.id, classId, draft.createdAt, listOf(entry))
+        assertEquals(draft.id, repository.drafts.value.single().id)
+    }
+
+    @Test fun avatarCompletesOnlySelectedStudentsMaterials() {
+        val store = Store()
+        val repository = AttendanceRepository(store.preferences)
+        repository.addClass("Demo")
+        val classId = repository.classes.value.single().id
+        repository.addStudent(classId, "Alice", "001")
+        repository.addStudent(classId, "Bob", "002")
+        val students = repository.classes.value.single().students
+        val taskId = repository.createMaterialTask(classId, "Materials", listOf("A", "B"))
+        val material = repository.classes.value.single().materialTasks.single().materials.first()
+        repository.setMaterialRecord(classId, taskId, students[0].id, material.id, MaterialRecordStatus.REJECTED)
+        repository.setMaterialRecord(classId, taskId, students[1].id, material.id, MaterialRecordStatus.REJECTED)
+        assertTrue(repository.awaitSaved())
+        val before = store.commits.size
+        repository.completeStudentMaterials(classId, taskId, students[0].id)
+        assertTrue(repository.awaitSaved())
+        assertEquals(before + 1, store.commits.size)
+        val task = repository.classes.value.single().materialTasks.single()
+        assertEquals(2, task.records.count { it.studentId == students[0].id && it.status == MaterialRecordStatus.COMPLETED })
+        assertEquals(MaterialRecordStatus.REJECTED, task.records.single { it.studentId == students[1].id }.status)
+        repository.completeStudentMaterials(classId, taskId, students[0].id)
+        assertEquals(task.records, repository.classes.value.single().materialTasks.single().records)
+        assertTrue(repository.awaitSaved())
+        assertEquals(task.records, AttendanceRepository(store.preferences).classes.value.single().materialTasks.single().records)
     }
 
     @Test fun materialTaskTracksEachStudentAndMaterialIndependently() {

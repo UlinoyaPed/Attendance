@@ -487,6 +487,7 @@ fun AttendanceApp() {
                 onSetStatus = { studentId, materialId, status ->
                     repository.setMaterialRecord(group.id, task.id, studentId, materialId, status)
                 },
+                onCompleteStudent = { repository.completeStudentMaterials(group.id, task.id, it) },
                 onSetCompleted = { repository.setMaterialTaskCompleted(group.id, task.id, it) },
                 onDelete = {
                     repository.deleteMaterialTask(group.id, task.id)
@@ -1408,7 +1409,7 @@ private fun RollCallScreen(
         AlertDialog(
             onDismissRequest = { showClearDraftDialog = false },
             title = { Text("清空本次点名标记？") },
-            text = { Text("将清除本班本次点名的全部状态和原因，所有学生恢复为未点。将保留本条记录，其他点名记录不受影响，此操作无法撤销。") },
+            text = { Text("将清除本班本次点名的全部状态和原因，所有学生恢复为未点。空草稿会自动删除，已完成的记录仍保留。其他点名记录不受影响，此操作无法撤销。") },
             confirmButton = {
                 TextButton(onClick = {
                     onDraftChange(emptyList())
@@ -3025,7 +3026,7 @@ private fun RollCallItem(
     val markColor = colorOption?.let { statusColor(it) }
     // Pre-composite the tint so the swipe background cannot bleed through the card.
     val surfaceColor = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 1f)
-    val container = markColor?.copy(alpha = 0.16f)?.compositeOver(surfaceColor) ?: surfaceColor
+    val container = markColor?.copy(alpha = 0.24f)?.compositeOver(surfaceColor) ?: surfaceColor
 
 
     SwipeRecordContainer(

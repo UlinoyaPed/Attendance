@@ -78,7 +78,7 @@ class AttendanceRepository internal constructor(private val preferences: android
     fun removeStudent(classId: String, studentId: String) {
         _drafts.value = _drafts.value.map { draft ->
             if (draft.classId == classId) draft.copy(entries = draft.entries.filterNot { it.studentId == studentId }) else draft
-        }
+        }.filter { it.entries.isNotEmpty() }
         updateClass(classId) { group ->
             group.copy(
                 students = group.students.filterNot { it.id == studentId },
@@ -149,8 +149,6 @@ class AttendanceRepository internal constructor(private val preferences: android
         require(_drafts.value.size < 1000) { "草稿数量已达上限" }
         val now = System.currentTimeMillis()
         val draft = RollCallDraft(newId(), classId, now, now, emptyList())
-        _drafts.value = listOf(draft) + _drafts.value
-        saveRollCallDrafts()
         return draft
     }
 
@@ -165,6 +163,10 @@ class AttendanceRepository internal constructor(private val preferences: android
             requireSafeField(entry.studentName, "学生姓名")
             requireSafeField(entry.studentNumber, "学号", required = false)
             requireSafeField(entry.reason, "原因", 240, required = false)
+        }
+        if (entries.isEmpty()) {
+            if (_drafts.value.any { it.id == draftId }) deleteRollCallDraft(draftId)
+            return
         }
         require(_drafts.value.any { it.id == draftId } || _drafts.value.size < 1000) { "草稿数量已达上限" }
         val now = System.currentTimeMillis()
@@ -277,6 +279,23 @@ class AttendanceRepository internal constructor(private val preferences: android
                     }.let { remaining ->
                         if (status == MaterialRecordStatus.PENDING) remaining
                         else remaining + MaterialRecord(studentId, materialId, status)
+                    },
+                )
+            }
+        })
+    }
+
+    fun completeStudentMaterials(classId: String, taskId: String, studentId: String) = updateClass(classId) { group ->
+        require(group.materialTasks.any { it.id == taskId }) { "材料任务不存在" }
+        group.copy(materialTasks = group.materialTasks.map { task ->
+            if (task.id != taskId) task else {
+                require(task.participants.any { it.id == studentId }) { "本次登记中没有该学生" }
+                val remaining = task.records.filterNot { it.studentId == studentId }
+                require(remaining.size + task.materials.size <= 20_000) { "材料登记数量已达上限" }
+                task.copy(
+                    updatedAt = System.currentTimeMillis(),
+                    records = remaining + task.materials.map {
+                        MaterialRecord(studentId, it.id, MaterialRecordStatus.COMPLETED)
                     },
                 )
             }
@@ -809,7 +828,7 @@ class AttendanceRepository internal constructor(private val preferences: android
         return buildList {
             for (index in 0 until array.length()) {
                 val item = array.getJSONObject(index)
-                val entries = parseAttendanceEntries(item.optJSONArray("entries") ?: JSONArray())
+                val entries = parseAttendanceEntries(item.optJSONArray("entries") ?: JSONArray(), allowUnmarked = true)
                 add(
                     AttendanceSession(
                         id = item.getString("id"),
@@ -828,7 +847,7 @@ class AttendanceRepository internal constructor(private val preferences: android
 
     private fun parseRollCallDrafts(raw: String): List<RollCallDraft> {
         val array = JSONArray(raw)
-        return buildList {
+        return buildList<RollCallDraft> {
             for (index in 0 until array.length()) {
                 val item = array.getJSONObject(index)
                 val classId = item.getString("classId")
@@ -841,10 +860,10 @@ class AttendanceRepository internal constructor(private val preferences: android
                     entries = parseAttendanceEntries(item.optJSONArray("entries") ?: JSONArray()),
                 ))
             }
-        }
+        }.filter { it.entries.isNotEmpty() }
     }
 
-    private fun parseAttendanceEntries(array: JSONArray): List<AttendanceEntry> = buildList {
+    private fun parseAttendanceEntries(array: JSONArray, allowUnmarked: Boolean = false): List<AttendanceEntry> = buildList {
         for (index in 0 until array.length()) {
             val entry = array.getJSONObject(index)
             add(
@@ -853,7 +872,7 @@ class AttendanceRepository internal constructor(private val preferences: android
                     studentName = entry.getString("studentName"),
                     studentNumber = entry.optString("studentNumber"),
                     status = AttendanceStatus.valueOf(entry.getString("status")).also {
-                        require(it != AttendanceStatus.UNMARKED) { "记录含无效点名状态" }
+                        require(allowUnmarked || it != AttendanceStatus.UNMARKED) { "记录含无效点名状态" }
                     },
                     reason = entry.optString("reason"),
                 ),
