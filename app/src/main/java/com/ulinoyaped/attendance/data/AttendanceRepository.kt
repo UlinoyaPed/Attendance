@@ -296,6 +296,19 @@ class AttendanceRepository internal constructor(private val preferences: android
         saveSessions()
     }
 
+    fun updateSessionEntries(sessionId: String, entries: List<AttendanceEntry>) {
+        val marks = entries.associateBy { it.studentId }
+        _sessions.value = _sessions.value.map { session ->
+            if (session.id != sessionId) session else session.copy(
+                entries = session.entries.map { original ->
+                    val mark = marks[original.studentId]
+                    original.copy(status = mark?.status ?: AttendanceStatus.UNMARKED, reason = mark?.reason.orEmpty())
+                },
+            )
+        }
+        saveSessions()
+    }
+
     fun updateSessionEntry(
         sessionId: String,
         studentId: String,

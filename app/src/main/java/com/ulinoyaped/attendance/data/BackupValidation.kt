@@ -123,7 +123,7 @@ fun validateBackup(root: JSONObject) {
             field(entry, "studentName")
             field(entry, "studentNumber", required = false)
             field(entry, "reason", 240, false)
-            require(entry.getString("status") in AttendanceStatus.entries.filter { it != AttendanceStatus.UNMARKED }.map { it.name }) { "点名状态无效" }
+            require(entry.getString("status") in AttendanceStatus.entries.filter { !draft || it != AttendanceStatus.UNMARKED }.map { it.name }) { "点名状态无效" }
         }
     }
     val sessions = root.getJSONArray("sessions")

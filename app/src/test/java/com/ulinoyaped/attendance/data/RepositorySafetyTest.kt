@@ -41,6 +41,32 @@ class RepositorySafetyTest {
         }
     }
 
+    @Test fun editingCompletedAttendancePreservesSnapshotAndOtherDrafts() {
+        val store = Store()
+        val repository = AttendanceRepository(store.preferences)
+        repository.addClass("Demo")
+        val classId = repository.classes.value.single().id
+        repository.addStudent(classId, "Alice", "001")
+        val student = repository.classes.value.single().students.single()
+        val original = AttendanceEntry(student.id, student.name, student.studentNumber, AttendanceStatus.PRESENT)
+        val sessionId = repository.saveSession(classId, listOf(original))
+        val createdAt = repository.sessions.value.single().createdAt
+        val draft = repository.createRollCallDraft(classId)
+        repository.removeStudent(classId, student.id)
+        repository.updateSessionEntries(sessionId, listOf(original.copy(status = AttendanceStatus.LEAVE, reason = "test")))
+        assertEquals(original.copy(status = AttendanceStatus.LEAVE, reason = "test"), repository.sessions.value.single().entries.single())
+        repository.updateSessionEntries(sessionId, emptyList())
+        assertEquals(original.copy(status = AttendanceStatus.UNMARKED), repository.sessions.value.single().entries.single())
+        assertEquals(createdAt, repository.sessions.value.single().createdAt)
+        assertEquals(sessionId, repository.sessions.value.single().id)
+        assertNotNull(repository.getRollCallDraft(draft.id))
+        assertTrue(repository.awaitSaved())
+        val restored = AttendanceRepository(store.preferences)
+        assertEquals(repository.sessions.value, restored.sessions.value)
+        assertTrue(restored.importBackup(repository.exportBackup()))
+        assertEquals(repository.sessions.value, restored.sessions.value)
+    }
+
     @Test fun invalidBackupDoesNotWriteAnything() {
         val store = Store()
         val repository = AttendanceRepository(store.preferences)

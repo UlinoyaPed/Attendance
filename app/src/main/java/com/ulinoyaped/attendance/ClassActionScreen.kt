@@ -16,7 +16,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Inventory2
@@ -44,7 +43,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ulinoyaped.attendance.data.ClassGroup
 import com.ulinoyaped.attendance.data.ProfileIconOption
@@ -52,27 +50,23 @@ import com.ulinoyaped.attendance.data.ProfileIconOption
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ClassActionScreen(
-    group: ClassGroup,
+    group: ClassGroup?,
     profileIcon: ProfileIconOption,
-    onBack: () -> Unit,
+    onChooseClass: () -> Unit,
     onStartAttendance: () -> Unit,
     onStartMaterials: (String, List<String>) -> Unit,
     onManageClass: () -> Unit,
-    onOpenSettings: () -> Unit,
+    bottomBar: @Composable () -> Unit,
 ) {
-    var showMaterialDialog by remember(group.id) { mutableStateOf(false) }
+    var showMaterialDialog by remember(group?.id) { mutableStateOf(false) }
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(group.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                actions = { ProfileAvatarButton(profileIcon, onOpenSettings) },
+                title = { Text("选择工作") },
+                actions = { ProfileAvatarButton(profileIcon, onChooseClass) },
             )
         },
+        bottomBar = bottomBar,
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
@@ -80,15 +74,16 @@ internal fun ClassActionScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
-                Text("选择本次工作", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+                Text(group?.name ?: "尚未选择班级", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
                 Text(
-                    "每次点名或材料登记都会生成一条独立记录，并立即出现在历史中。",
+                    if (group == null) "点击右上角头像创建或选择班级。"
+                    else "${group.students.size} 名学生 · 点击右上角头像切换班级",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 5.dp, bottom = 8.dp),
                 )
             }
-            item {
+            if (group != null) item {
                 ClassActionItem(
                     title = "开始点名",
                     subtitle = "创建一次新的点名记录",
@@ -97,7 +92,7 @@ internal fun ClassActionScreen(
                     onClick = onStartAttendance,
                 )
             }
-            item {
+            if (group != null) item {
                 ClassActionItem(
                     title = "材料登记",
                     subtitle = "自定义本次名称和一份或多份材料",
@@ -106,7 +101,7 @@ internal fun ClassActionScreen(
                     onClick = { showMaterialDialog = true },
                 )
             }
-            item {
+            if (group != null) item {
                 Text("班级", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp, bottom = 2.dp))
                 ClassActionItem(
                     title = "管理班级",
@@ -118,7 +113,7 @@ internal fun ClassActionScreen(
             }
         }
     }
-    if (showMaterialDialog) {
+    if (showMaterialDialog && group != null) {
         MaterialTaskCreateDialog(
             onDismiss = { showMaterialDialog = false },
             onConfirm = { title, names ->
@@ -171,7 +166,7 @@ internal fun ProfileAvatarButton(icon: ProfileIconOption, onClick: () -> Unit) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     profileImageVector(icon),
-                    contentDescription = "打开设置",
+                    contentDescription = "切换班级",
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
                     modifier = Modifier.size(21.dp),
                 )

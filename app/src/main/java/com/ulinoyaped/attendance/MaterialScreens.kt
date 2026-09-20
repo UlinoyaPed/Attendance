@@ -44,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -135,6 +136,9 @@ internal fun MaterialTaskScreen(
                         task.materials.forEach { material ->
                             val current = statusByKey[student.id to material.id]?.status ?: MaterialRecordStatus.PENDING
                             MaterialRecordRow(
+                                recordKey = "${task.id}/${student.id}/${material.id}",
+                                onReject = { onSetStatus(student.id, material.id, MaterialRecordStatus.REJECTED) },
+                                onComplete = { onSetStatus(student.id, material.id, MaterialRecordStatus.COMPLETED) },
                                 name = material.name,
                                 status = current,
                                 onToggle = {
@@ -195,6 +199,9 @@ internal fun MaterialTaskScreen(
 
 @Composable
 private fun MaterialRecordRow(
+    recordKey: String,
+    onReject: () -> Unit,
+    onComplete: () -> Unit,
     name: String,
     status: MaterialRecordStatus,
     onToggle: () -> Unit,
@@ -205,30 +212,38 @@ private fun MaterialRecordRow(
         MaterialRecordStatus.COMPLETED -> MaterialTheme.colorScheme.primary
         MaterialRecordStatus.REJECTED -> MaterialTheme.colorScheme.error
     }
-    Surface(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle),
-        shape = RoundedCornerShape(12.dp),
-        color = tint.copy(alpha = 0.10f),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
-            verticalAlignment = Alignment.CenterVertically,
+    SwipeRecordContainer(
+        key = recordKey,
+        left = SwipeActionVisual("不合格", MaterialTheme.colorScheme.error, Icons.Default.Close),
+        right = SwipeActionVisual("已完成", MaterialTheme.colorScheme.primary, Icons.Default.CheckCircle),
+        onSwipeLeft = onReject,
+        onSwipeRight = onComplete,
+    ) { swipeModifier ->
+        Surface(
+            modifier = swipeModifier.fillMaxWidth().clickable(onClick = onToggle),
+            shape = RoundedCornerShape(12.dp),
+            color = tint.copy(alpha = 0.10f).compositeOver(MaterialTheme.colorScheme.surfaceContainerLow),
         ) {
-            Icon(
-                when (status) {
-                    MaterialRecordStatus.PENDING -> Icons.Default.Inventory2
-                    MaterialRecordStatus.COMPLETED -> Icons.Default.CheckCircle
-                    MaterialRecordStatus.REJECTED -> Icons.Default.Close
-                },
-                contentDescription = null,
-                tint = tint,
-                modifier = Modifier.size(20.dp),
-            )
-            Column(modifier = Modifier.weight(1f).padding(horizontal = 10.dp)) {
-                Text(name, style = MaterialTheme.typography.bodyLarge)
-                Text(materialStatusLabel(status), style = MaterialTheme.typography.bodySmall, color = tint)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    when (status) {
+                        MaterialRecordStatus.PENDING -> Icons.Default.Inventory2
+                        MaterialRecordStatus.COMPLETED -> Icons.Default.CheckCircle
+                        MaterialRecordStatus.REJECTED -> Icons.Default.Close
+                    },
+                    contentDescription = null,
+                    tint = tint,
+                    modifier = Modifier.size(20.dp),
+                )
+                Column(modifier = Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                    Text(name, style = MaterialTheme.typography.bodyLarge)
+                    Text(materialStatusLabel(status), style = MaterialTheme.typography.bodySmall, color = tint)
+                }
+                TextButton(onClick = onEdit) { Text("状态") }
             }
-            TextButton(onClick = onEdit) { Text("状态") }
         }
     }
 }
