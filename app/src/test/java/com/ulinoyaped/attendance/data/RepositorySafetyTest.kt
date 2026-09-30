@@ -70,6 +70,52 @@ class RepositorySafetyTest {
         assertEquals(repository.sessions.value, restored.sessions.value)
     }
 
+    @Test fun themeSettingsRoundTripAndRejectInvalidColor() {
+        val store = Store()
+        val repository = AttendanceRepository(store.preferences)
+        repository.setTheme(ThemeSource.CUSTOM, "#386a54")
+        assertTrue(repository.awaitSaved())
+        val restored = AttendanceRepository(store.preferences)
+        assertEquals(ThemeSource.CUSTOM, restored.settings.value.themeSource)
+        assertEquals("#386A54", restored.settings.value.themeSeed)
+        assertTrue(restored.importBackup(repository.exportBackup()))
+        val bad = JSONObject(repository.exportBackup())
+        bad.getJSONObject("settings").put("themeSeed", "invalid")
+        assertFalse(restored.importBackup(bad.toString()))
+        assertEquals("#386A54", restored.settings.value.themeSeed)
+    }
+
+    @Test fun classOverrideBackupRoundTripsAndRejectsUnknownKeys() {
+        val store = Store()
+        val repository = AttendanceRepository(store.preferences)
+        repository.addClass("A")
+        repository.addClass("B")
+        val classId = repository.classes.value.first().id
+        repository.setClassAttendanceSettings(classId, ClassAttendanceSettings(
+            values = repository.settings.value.copy(absenceReasons = listOf("local"), defaultReason = "local", exportReason = false,
+                absentColor = StatusColorOption.PURPLE, showMaterialStatusButton = false),
+            overriddenFields = setOf("absenceReasons", "defaultReason", "exportReason", "absentColor", "showMaterialStatusButton"),
+        ))
+        assertTrue(repository.awaitSaved())
+        val restored = AttendanceRepository(store.preferences)
+        val group = restored.classes.value.first { it.id == classId }
+        val effective = restored.settings.value.forClass(group)
+        assertEquals(listOf("local"), effective.absenceReasons)
+        assertEquals("local", effective.defaultReason)
+        assertFalse(effective.exportReason)
+        assertFalse(effective.showMaterialStatusButton)
+        assertEquals(StatusColorOption.PURPLE, effective.absentColor)
+        assertTrue(restored.importBackup(repository.exportBackup()))
+        val bad = JSONObject(repository.exportBackup())
+        val classes = bad.getJSONArray("classes")
+        val matching = (0 until classes.length()).map { classes.getJSONObject(it) }.first { it.getString("id") == classId }
+        matching.getJSONObject("attendanceSettings").getJSONArray("overriddenFields").put("unknown")
+        assertFalse(restored.importBackup(bad.toString()))
+        assertEquals(group.attendanceSettings, restored.classes.value.first { it.id == classId }.attendanceSettings)
+        restored.setClassAttendanceSettings(classId, null)
+        assertEquals(restored.settings.value, restored.settings.value.forClass(restored.classes.value.first { it.id == classId }))
+    }
+
     @Test fun invalidBackupDoesNotWriteAnything() {
         val store = Store()
         val repository = AttendanceRepository(store.preferences)

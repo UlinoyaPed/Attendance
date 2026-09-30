@@ -152,11 +152,19 @@ import com.ulinoyaped.attendance.data.HistoryTitleMode
 import com.ulinoyaped.attendance.data.DisplayOption
 import com.ulinoyaped.attendance.data.StatusColorOption
 import com.ulinoyaped.attendance.data.StatusIconOption
+import com.ulinoyaped.attendance.data.ThemeSource
 import com.ulinoyaped.attendance.data.ProfileIconOption
 import com.ulinoyaped.attendance.data.Student
 import com.ulinoyaped.attendance.data.iconFor
 import com.ulinoyaped.attendance.data.colorFor
 import com.ulinoyaped.attendance.data.forClass
+import androidx.compose.runtime.CompositionLocalProvider
+import com.ulinoyaped.attendance.data.legacyOverrideFields
+import com.ulinoyaped.attendance.data.withDisplayOption
+import com.ulinoyaped.attendance.data.settingField
+import com.ulinoyaped.attendance.data.settingPrefix
+import com.ulinoyaped.attendance.data.withStatusIcon
+import com.ulinoyaped.attendance.data.withStatusColor
 import com.ulinoyaped.attendance.data.toClassSettings
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -263,14 +271,6 @@ private enum class SettingSelector {
     HISTORY_TITLE,
 }
 
-private enum class ClassSettingSelector {
-    DEFAULT_STATUS,
-    DEFAULT_REASON,
-    LONG_PRESS,
-    SWIPE_LEFT,
-    SWIPE_RIGHT,
-}
-
 @Composable
 fun AttendanceApp() {
     val context = LocalContext.current
@@ -340,6 +340,7 @@ fun AttendanceApp() {
                 ClassActionScreen(
                     group = selectedClass,
                     profileIcon = settings.profileIcon,
+                    settings = selectedClass?.let { settings.forClass(it) } ?: settings,
                     onChooseClass = { screen = Screen.ClassPicker },
                     onStartAttendance = {
                         selectedClass?.let { group ->
@@ -374,10 +375,11 @@ fun AttendanceApp() {
             onOpenMaterialTask = { classId, taskId ->
                 screen = Screen.MaterialTaskDetail(classId, taskId, MaterialBackTarget.HISTORY)
             },
+            onSetTheme = repository::setTheme,
             onSetProfileIcon = repository::setProfileIcon,
             onAddReason = repository::addAbsenceReason,
             onRemoveReason = repository::removeAbsenceReason,
-            onMoveReason = repository::moveAbsenceReason,
+            onReorderReasons = repository::setAbsenceReasons,
             onSetDefaultReason = repository::setDefaultReason,
             onSetDefaultStatus = repository::setDefaultStatus,
             onSetLongPressAction = repository::setLongPressAction,
@@ -450,7 +452,6 @@ fun AttendanceApp() {
                     onBack = { screen = Screen.ClassDetail(group.id, current.backToActions) },
                     onSave = {
                         repository.setClassAttendanceSettings(group.id, it)
-                        screen = Screen.ClassDetail(group.id, current.backToActions)
                     },
                 )
             }
@@ -478,6 +479,7 @@ fun AttendanceApp() {
             val task = group?.materialTasks?.firstOrNull { it.id == current.taskId }
             if (group == null || task == null) screen = Screen.Root(RootTab.HISTORY) else MaterialTaskScreen(
                 task = task,
+                settings = settings.forClass(group),
                 onBack = {
                     screen = when (current.backTarget) {
                         MaterialBackTarget.CLASS_ACTIONS -> Screen.Root(RootTab.CLASSES)
@@ -588,10 +590,11 @@ private fun RootScreen(
     onContinueDraft: (String, String) -> Unit,
     onDeleteDraft: (String) -> Unit,
     onOpenMaterialTask: (String, String) -> Unit,
+    onSetTheme: (ThemeSource, String) -> Unit,
     onSetProfileIcon: (ProfileIconOption) -> Unit,
     onAddReason: (String) -> Unit,
     onRemoveReason: (String) -> Unit,
-    onMoveReason: (Int, Int) -> Unit,
+    onReorderReasons: (List<String>) -> Unit,
     onSetDefaultReason: (String) -> Unit,
     onSetDefaultStatus: (AttendanceStatus) -> Unit,
     onSetLongPressAction: (GestureAction) -> Unit,
@@ -625,16 +628,16 @@ private fun RootScreen(
             onContinueDraft = onContinueDraft,
             onDeleteDraft = onDeleteDraft,
             onOpenMaterialTask = onOpenMaterialTask,
-            titleMode = settings.historyTitleMode,
-            showStatistics = settings.showHistoryStatistics,
+            settings = settings,
             bottomBar = bottomBar,
         )
         RootTab.SETTINGS -> SettingsScreen(
             settings = settings,
+            onSetTheme = onSetTheme,
             onSetProfileIcon = onSetProfileIcon,
             onAddReason = onAddReason,
             onRemoveReason = onRemoveReason,
-            onMoveReason = onMoveReason,
+            onReorderReasons = onReorderReasons,
             onSetDefaultReason = onSetDefaultReason,
             onSetDefaultStatus = onSetDefaultStatus,
             onSetLongPressAction = onSetLongPressAction,
@@ -786,7 +789,7 @@ private fun ClassesScreen(
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.SemiBold,
                                 )
-                                if (settings.showClassStudentCount) {
+                                if (settings.forClass(group).showClassStudentCount) {
                                     Text(
                                         "${group.students.size} 名学生${if (group.id == selectedClassId) " · 当前班级" else ""}",
                                         style = MaterialTheme.typography.bodyMedium,
@@ -1659,10 +1662,10 @@ private fun HistoryScreen(
     onContinueDraft: (String, String) -> Unit,
     onDeleteDraft: (String) -> Unit,
     onOpenMaterialTask: (String, String) -> Unit,
-    titleMode: HistoryTitleMode,
-    showStatistics: Boolean,
+    settings: AppSettings,
     bottomBar: @Composable () -> Unit,
 ) {
+    val perClassSettings = classes.associate { it.id to settings.forClass(it) }
     val classNames = classes.associate { it.id to it.name }
     val materialTasks = classes.flatMap { group -> group.materialTasks.map { group.id to it } }
     val draftRows: List<DraftHistoryRow> = (
@@ -1696,12 +1699,13 @@ private fun HistoryScreen(
                     when (row) {
                         is DraftHistoryRow.Attendance -> DraftHistoryItem(
                             className = classNames[row.draft.classId].orEmpty(), draft = row.draft,
-                            titleMode = titleMode,
+                            titleMode = (perClassSettings[row.draft.classId] ?: settings).historyTitleMode,
                             onContinue = { onContinueDraft(row.draft.classId, row.draft.id) },
                             onDelete = { draftToDelete = row.draft },
                         )
                         is DraftHistoryRow.Materials -> MaterialHistoryItem(
                             className = classNames[row.classId].orEmpty(), task = row.task,
+                            settings = perClassSettings[row.classId] ?: settings,
                             onClick = { onOpenMaterialTask(row.classId, row.task.id) },
                         )
                     }
@@ -1712,14 +1716,15 @@ private fun HistoryScreen(
                         is CompletedHistoryRow.Attendance -> GlobalHistoryItem(
                             className = classNames[row.session.classId].orEmpty(),
                             session = row.session,
-                            titleMode = titleMode,
-                            showStatistics = showStatistics,
+                            titleMode = (perClassSettings[row.session.classId] ?: settings).historyTitleMode,
+                            showStatistics = (perClassSettings[row.session.classId] ?: settings).showHistoryStatistics,
                             onClick = { onOpenResult(row.session.classId, row.session.id) },
                             onEdit = { onEditSession(row.session.classId, row.session.id) },
                             onDelete = { sessionToDelete = row.session },
                         )
                         is CompletedHistoryRow.Materials -> MaterialHistoryItem(
                             className = classNames[row.classId].orEmpty(), task = row.task,
+                            settings = perClassSettings[row.classId] ?: settings,
                             onClick = { onOpenMaterialTask(row.classId, row.task.id) },
                         )
                     }
@@ -1749,7 +1754,7 @@ private fun HistoryScreen(
 }
 
 @Composable
-private fun MaterialHistoryItem(className: String, task: MaterialTask, onClick: () -> Unit) {
+private fun MaterialHistoryItem(className: String, task: MaterialTask, settings: AppSettings, onClick: () -> Unit) {
     val completed = task.records.count { it.status == MaterialRecordStatus.COMPLETED }
     val rejected = task.records.count { it.status == MaterialRecordStatus.REJECTED }
     Card(
@@ -1763,7 +1768,11 @@ private fun MaterialHistoryItem(className: String, task: MaterialTask, onClick: 
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(task.title, style = MaterialTheme.typography.titleMedium)
-            Text("材料登记 · ${className.ifBlank { "班级" }} · ${task.materials.size} 份 · 完成 $completed · 不合格 $rejected", style = MaterialTheme.typography.bodySmall)
+            Text(
+                "材料登记 · ${if (settings.historyTitleMode == HistoryTitleMode.TIME) formatTime(task.updatedAt) else className.ifBlank { "班级" }} · ${task.materials.size} 份" +
+                    if (settings.showHistoryStatistics) " · 完成 $completed · 不合格 $rejected" else "",
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
         TextButton(onClick = onClick) { Text(if (task.completedAt == null) "继续" else "编辑") }
     } }
@@ -1804,10 +1813,11 @@ private fun DraftHistoryItem(
 @Composable
 private fun SettingsScreen(
     settings: AppSettings,
+    onSetTheme: (ThemeSource, String) -> Unit,
     onSetProfileIcon: (ProfileIconOption) -> Unit,
     onAddReason: (String) -> Unit,
     onRemoveReason: (String) -> Unit,
-    onMoveReason: (Int, Int) -> Unit,
+    onReorderReasons: (List<String>) -> Unit,
     onSetDefaultReason: (String) -> Unit,
     onSetDefaultStatus: (AttendanceStatus) -> Unit,
     onSetLongPressAction: (GestureAction) -> Unit,
@@ -1827,6 +1837,8 @@ private fun SettingsScreen(
     onSetExportReason: (Boolean) -> Unit,
     bottomBar: @Composable () -> Unit,
 ) {
+    val classScope = LocalClassSettingsScope.current
+    val destinations = if (classScope == null) settingsDestinations else settingsDestinations.map { group -> group.filter { it.key != "备份" } }.filter { it.isNotEmpty() }
     var page by rememberSaveable { mutableStateOf<String?>(null) }
     val pageStateHolder = rememberSaveableStateHolder()
     BackHandler(enabled = page != null) { page = null }
@@ -1871,9 +1883,10 @@ private fun SettingsScreen(
     }
     Scaffold(
         topBar = {
-            if (page == null) RootLargeTopBar("设置")
+            if (page == null && classScope == null) RootLargeTopBar("设置")
+            else if (page == null && classScope != null) SimpleBackBar("${classScope.name} · 设置", classScope.onBack)
             else SimpleBackBar(
-                title = settingsDestinations.flatten().first { it.key == page }.title,
+                title = destinations.flatten().first { it.key == page }.title,
                 onBack = { page = null },
             )
         },
@@ -1895,6 +1908,7 @@ private fun SettingsScreen(
             ) { displayedPage ->
                 pageStateHolder.SaveableStateProvider(displayedPage ?: "settingsHome") {
                     val listState = rememberLazyListState()
+                    val reasonDrag = rememberReasonReorderState(listState, settings.absenceReasons)
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
@@ -1902,14 +1916,15 @@ private fun SettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         if (displayedPage == null) {
-                            items(settingsDestinations) { destinations ->
+                            if (classScope != null) item { ClassSettingsSummary(classScope) }
+                            items(destinations) { destinations ->
                                 SettingsDestinationGroup(destinations) { page = it }
                                 Spacer(Modifier.height(8.dp))
                             }
                         }
                         if (displayedPage != null) {
                             item {
-                                val destination = settingsDestinations.flatten().first { it.key == displayedPage }
+                                val destination = destinations.flatten().first { it.key == displayedPage }
                                 SettingsPageIntro(destination)
                             }
                         }
@@ -1948,6 +1963,17 @@ private fun SettingsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(horizontal = 4.dp),
                                 )
+                            }
+                        }
+                        if (displayedPage == "材料") {
+                            item {
+                                SettingsGroup(title = "材料登记", subtitle = "控制快捷操作、提示与列表密度") {
+                                    SwitchSettingRow("头像确认全部材料", settings.materialAvatarCompletesAll) { onSetDisplayOption(DisplayOption.MATERIAL_AVATAR, it) }
+                                    SwitchSettingRow("显示材料统计", settings.showMaterialProgress) { onSetDisplayOption(DisplayOption.MATERIAL_PROGRESS, it) }
+                                    SwitchSettingRow("显示材料操作提示", settings.showMaterialOperationHint) { onSetDisplayOption(DisplayOption.MATERIAL_HINT, it) }
+                                    SwitchSettingRow("紧凑材料列表", settings.compactMaterialRows) { onSetDisplayOption(DisplayOption.MATERIAL_COMPACT, it) }
+                                    SwitchSettingRow("显示材料状态按钮", settings.showMaterialStatusButton) { onSetDisplayOption(DisplayOption.MATERIAL_STATUS_BUTTON, it) }
+                                }
                             }
                         }
                         if (displayedPage == "显示") {
@@ -2051,63 +2077,20 @@ private fun SettingsScreen(
                                 ) {
                                     SectionTitle("常用原因顺序")
                                     Spacer(Modifier.weight(1f))
-                                    TextButton(onClick = { showAddReason = true }) { Text("添加") }
+                                    TextButton(onClick = { showAddReason = true }, enabled = settings.absenceReasons.size < 100) { Text("添加") }
                                 }
                             }
                             if (settings.absenceReasons.isEmpty()) {
                                 item { HintCard("暂未设置常用原因。点名时仍可手动输入原因。") }
                             } else {
-                                itemsIndexed(settings.absenceReasons, key = { _, reason -> reason }) { index, reason ->
-                                    val density = LocalDensity.current
-                                    var accumulatedDrag by remember(reason) { mutableFloatStateOf(0f) }
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors = CardDefaults.cardColors(
-                                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                                        ),
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                        ) {
-                                            Icon(
-                                                Icons.Default.DragHandle,
-                                                contentDescription = "拖动排序",
-                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier
-                                                    .size(42.dp)
-                                                    .padding(9.dp)
-                                                    .pointerInput(reason, index) {
-                                                        detectDragGesturesAfterLongPress(
-                                                            onDragStart = { accumulatedDrag = 0f },
-                                                            onDragEnd = { accumulatedDrag = 0f },
-                                                            onDragCancel = { accumulatedDrag = 0f },
-                                                            onDrag = { change, dragAmount ->
-                                                                change.consume()
-                                                                accumulatedDrag += dragAmount.y
-                                                                val threshold = with(density) { 42.dp.toPx() }
-                                                                if (abs(accumulatedDrag) >= threshold) {
-                                                                    val target = if (accumulatedDrag > 0) index + 1 else index - 1
-                                                                    if (target in settings.absenceReasons.indices) {
-                                                                        onMoveReason(index, target)
-                                                                    }
-                                                                    accumulatedDrag = 0f
-                                                                }
-                                                            },
-                                                        )
-                                                    },
-                                            )
-                                            Text(reason, modifier = Modifier.weight(1f))
-                                            IconButton(onClick = { onRemoveReason(reason) }) {
-                                                Icon(Icons.Default.Delete, contentDescription = "删除")
-                                            }
-                                        }
-                                    }
-                                }
+                                item { SettingInheritance("常用原因") }
+                                reasonReorderItems(reasonDrag, onReorderReasons, onRemoveReason)
                             }
                         }
                         if (displayedPage == "外观") {
-                            item {
+                            if (classScope == null) item { ThemeSettingsCard(settings, onSetTheme) }
+                            else item { HintCard("应用主题、头像与整机备份在全局设置中管理。以下状态外观可仅为本班设置。") }
+                            if (classScope == null) item {
                                 SettingsGroup(title = "应用头像", subtitle = "显示在班级首页与功能页右上角") {
                                     SettingRow(
                                         title = "头像图标",
@@ -2373,173 +2356,56 @@ private fun ClassSettingsScreen(
     onBack: () -> Unit,
     onSave: (ClassAttendanceSettings?) -> Unit,
 ) {
-    var customEnabled by remember(group.id, group.attendanceSettings) {
-        mutableStateOf(group.attendanceSettings != null)
+    val effective = globalSettings.forClass(group)
+    val fields = group.attendanceSettings?.let {
+        if (it.values != null) it.overriddenFields else legacyOverrideFields
+    }.orEmpty().let { saved ->
+        if ("collapsedResultStatuses" in saved) (saved - "collapsedResultStatuses") +
+            resultCollapseOptions.values.map { "collapse.${it.name}" } else saved
     }
-    var draft by remember(group.id, group.attendanceSettings, globalSettings) {
-        mutableStateOf(group.attendanceSettings ?: globalSettings.toClassSettings())
+    fun change(vararg names: String, transform: (AppSettings) -> AppSettings) {
+        onSave(ClassAttendanceSettings(values = transform(effective), overriddenFields = fields + names))
     }
-    var selector by remember { mutableStateOf<ClassSettingSelector?>(null) }
-    var page by rememberSaveable(group.id) { mutableStateOf<String?>(null) }
-    BackHandler(enabled = page != null) { page = null }
-
-    Scaffold(
-        topBar = {
-            SimpleBackBar(
-                title = page?.let { selected -> classSettingsDestinations.flatten().first { it.key == selected }.title }
-                    ?: "${group.name} · 设置",
-                onBack = { if (page == null) onBack() else page = null },
-            ) {
-                TextButton(onClick = { onSave(draft.takeIf { customEnabled }) }) {
-                    Text("保存")
-                }
-            }
+    val scope = ClassSettingsScope(group.name, fields,
+        onReset = { key ->
+            val remaining = fields - key
+            onSave(if (remaining.isEmpty()) null else ClassAttendanceSettings(values = effective, overriddenFields = remaining))
         },
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 32.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            item {
-                SettingsGroup(title = "班级专属设置", subtitle = "启用后仅覆盖这个班级支持的点名选项") {
-                    SwitchSettingRow("覆盖全局点名设置", customEnabled) { enabled ->
-                        customEnabled = enabled
-                        if (!enabled) page = null
-                        if (enabled && group.attendanceSettings == null) {
-                            draft = globalSettings.toClassSettings()
-                        }
-                    }
+        onResetAll = { onSave(null) }, onBack = onBack,
+    )
+    CompositionLocalProvider(LocalClassSettingsScope provides scope) {
+        SettingsScreen(
+            settings = effective,
+            onSetTheme = { _, _ -> }, onSetProfileIcon = {},
+            onAddReason = { reason ->
+                val clean = reason.trim()
+                if (clean.isNotEmpty() && clean !in effective.absenceReasons && effective.absenceReasons.size < 100) {
+                    change("absenceReasons") { it.copy(absenceReasons = it.absenceReasons + clean) }
                 }
-            }
-            if (!customEnabled) {
-                item { HintCard("当前跟随全局设置。启用后可按与全局设置相同的分类调整这个班级。") }
-            } else if (page == null) {
-                items(classSettingsDestinations) { destinations ->
-                    SettingsDestinationGroup(destinations) { page = it }
-                    Spacer(Modifier.height(8.dp))
-                }
-                item {
-                    Text(
-                        "未到原因列表、状态图标、颜色、导出内容和历史标题继续使用全局设置。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
-                    )
-                }
-            } else {
-                item {
-                    SettingsPageIntro(classSettingsDestinations.flatten().first { it.key == page })
-                }
-            }
-            if (customEnabled && page == "操作") {
-                item {
-                    SettingsGroup(title = "点名操作", subtitle = "与全局设置使用相同的操作选项") {
-                        SettingRow("点按默认选择", draft.defaultStatus.label) {
-                            selector = ClassSettingSelector.DEFAULT_STATUS
-                        }
-
-                        SettingRow("默认未到原因", draft.defaultReason.ifBlank { "不预填" }) {
-                            selector = ClassSettingSelector.DEFAULT_REASON
-                        }
-
-                        SettingRow("长按姓名", draft.longPressAction.label) {
-                            selector = ClassSettingSelector.LONG_PRESS
-                        }
-
-                        SettingRow("向左滑动", draft.swipeLeftAction.label) {
-                            selector = ClassSettingSelector.SWIPE_LEFT
-                        }
-
-                        SettingRow("向右滑动", draft.swipeRightAction.label) {
-                            selector = ClassSettingSelector.SWIPE_RIGHT
-                        }
-                    }
-                }
-            }
-            if (customEnabled && page == "结果") {
-                item {
-                    SettingsGroup(title = "结果排列", subtitle = "控制本班点名结果的分组方式") {
-                        SwitchSettingRow(
-                            "按状态分类排列",
-                            draft.groupResultsByStatus,
-                        ) { draft = draft.copy(groupResultsByStatus = it) }
-                        SwitchSettingRow("显示结果统计卡", draft.showResultSummary) {
-                            draft = draft.copy(showResultSummary = it)
-                        }
-
-                        SwitchSettingRow("显示空结果分类", draft.showEmptyResultGroups) {
-                            draft = draft.copy(showEmptyResultGroups = it)
-                        }
-                    }
-                }
-                item {
-                    SettingsGroup(title = "分类折叠", subtitle = "进入结果页时默认收起指定分类") {
-                        resultCollapseOptions.values.forEach { status ->
-                            SwitchSettingRow("默认折叠${status.label}列表", status in draft.collapsedResultStatuses) { enabled ->
-                                draft = draft.copy(
-                                    collapsedResultStatuses = if (enabled) draft.collapsedResultStatuses + status
-                                    else draft.collapsedResultStatuses - status,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            if (customEnabled && page == "显示") {
-                item {
-                    SettingsGroup(title = "点名列表", subtitle = "名单信息、操作控件与行间距") {
-                        SwitchSettingRow("显示学生学号", draft.showStudentNumbers) {
-                            draft = draft.copy(showStudentNumbers = it)
-                        }
-
-                        SwitchSettingRow("显示已处理进度", draft.showRollCallProgress) {
-                            draft = draft.copy(showRollCallProgress = it)
-                        }
-
-                        SwitchSettingRow("显示点名操作提示", draft.showOperationHint) {
-                            draft = draft.copy(showOperationHint = it)
-                        }
-
-                        SwitchSettingRow("显示状态按钮", draft.showStatusButton) {
-                            draft = draft.copy(showStatusButton = it)
-                        }
-
-                        SwitchSettingRow("名单中显示原因", draft.showReasonsInRollCall) {
-                            draft = draft.copy(showReasonsInRollCall = it)
-                        }
-
-                        SwitchSettingRow("紧凑点名列表", draft.compactRollCallRows) {
-                            draft = draft.copy(compactRollCallRows = it)
-                        }
-
-                        SwitchSettingRow("未点完时二次确认", draft.confirmIncompleteAttendance) {
-                            draft = draft.copy(confirmIncompleteAttendance = it)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    selector?.let { selected ->
-        when (selected) {
-            ClassSettingSelector.DEFAULT_STATUS -> StatusChoiceDialog(
-                "点按默认选择", draft.defaultStatus, { selector = null },
-            ) { draft = draft.copy(defaultStatus = it); selector = null }
-            ClassSettingSelector.DEFAULT_REASON -> ReasonChoiceDialog(
-                globalSettings.absenceReasons, draft.defaultReason, { selector = null },
-            ) { draft = draft.copy(defaultReason = it); selector = null }
-            ClassSettingSelector.LONG_PRESS -> GestureChoiceDialog(
-                "长按姓名", draft.longPressAction, { selector = null },
-            ) { draft = draft.copy(longPressAction = it); selector = null }
-            ClassSettingSelector.SWIPE_LEFT -> GestureChoiceDialog(
-                "向左滑动", draft.swipeLeftAction, { selector = null },
-            ) { draft = draft.copy(swipeLeftAction = it); selector = null }
-            ClassSettingSelector.SWIPE_RIGHT -> GestureChoiceDialog(
-                "向右滑动", draft.swipeRightAction, { selector = null },
-            ) { draft = draft.copy(swipeRightAction = it); selector = null }
-        }
+            },
+            onRemoveReason = { reason ->
+                change("absenceReasons", "defaultReason") { it.copy(absenceReasons = it.absenceReasons - reason,
+                    defaultReason = it.defaultReason.takeUnless { value -> value == reason }.orEmpty()) }
+            },
+            onReorderReasons = { reasons -> change("absenceReasons") { it.copy(absenceReasons = reasons) } },
+            onSetDefaultReason = { value -> change("defaultReason") { it.copy(defaultReason = value) } },
+            onSetDefaultStatus = { value -> change("defaultStatus") { it.copy(defaultStatus = value) } },
+            onSetLongPressAction = { value -> change("longPressAction") { it.copy(longPressAction = value) } },
+            onSetSwipeLeftAction = { value -> change("swipeLeftAction") { it.copy(swipeLeftAction = value) } },
+            onSetSwipeRightAction = { value -> change("swipeRightAction") { it.copy(swipeRightAction = value) } },
+            onSetStatusIcon = { status, value -> change(status.settingPrefix() + "Icon") { it.withStatusIcon(status, value) } },
+            onSetStatusColor = { status, value -> change(status.settingPrefix() + "Color") { it.withStatusColor(status, value) } },
+            onSetGroupResultsByStatus = { value -> change("groupResultsByStatus") { it.copy(groupResultsByStatus = value) } },
+            onSetHistoryTitleMode = { value -> change("historyTitleMode") { it.copy(historyTitleMode = value) } },
+            onSetDisplayOption = { option, enabled -> change(option.settingField()) { it.withDisplayOption(option, enabled) } },
+            onExportBackup = { "" }, onImportBackup = { false },
+            onSetExportHeader = { value -> change("exportHeader") { it.copy(exportHeader = value) } },
+            onSetExportSummary = { value -> change("exportSummary") { it.copy(exportSummary = value) } },
+            onSetExportPresentStudents = { value -> change("exportPresentStudents") { it.copy(exportPresentStudents = value) } },
+            onSetExportStudentNumber = { value -> change("exportStudentNumber") { it.copy(exportStudentNumber = value) } },
+            onSetExportReason = { value -> change("exportReason") { it.copy(exportReason = value) } },
+            bottomBar = {},
+        )
     }
 }
 
@@ -2553,6 +2419,7 @@ private data class SettingsDestination(
 private val settingsDestinations = listOf(
     listOf(
         SettingsDestination("操作", "点名操作", "点按默认状态、长按与左右滑动", Icons.Default.Settings),
+        SettingsDestination("材料", "材料登记", "头像确认、统计提示、状态按钮与列表密度", Icons.Default.Inventory2),
         SettingsDestination("原因", "未到原因", "常用原因、默认选择与拖动排序", Icons.Default.EventBusy),
     ),
     listOf(
@@ -2564,14 +2431,6 @@ private val settingsDestinations = listOf(
         SettingsDestination("导出", "文本导出", "分类明细、统计、学号与原因", Icons.Default.Save),
         SettingsDestination("历史", "历史记录", "班级名称与点名时间标题", Icons.Default.History),
         SettingsDestination("备份", "数据备份", "完整备份与恢复班级、历史和草稿", Icons.Default.FileUpload),
-    ),
-)
-
-private val classSettingsDestinations = listOf(
-    listOf(
-        SettingsDestination("操作", "点名操作", "点按默认状态、原因、长按与左右滑动", Icons.Default.Settings),
-        SettingsDestination("显示", "界面显示", "学号、进度、状态按钮与列表间距", Icons.Default.Person),
-        SettingsDestination("结果", "结果排列", "分类、统计、空分类与默认折叠", Icons.Default.Groups),
     ),
 )
 
@@ -2682,7 +2541,7 @@ private fun SettingsRowIcon(title: String) {
 
 private fun settingDescription(title: String): String? = when (title) {
     "显示班级人数" -> "在首页班级卡片中显示名单人数"
-    "显示班级页操作提示" -> "显示点击点名、长按编辑的操作说明"
+    "显示班级页操作提示" -> "显示头像切换班级与班级管理的操作提示"
     "显示学生学号" -> "在名单、点名和结果中显示学号"
     "显示已处理进度" -> "显示已点人数与本班总人数"
     "显示点名操作提示" -> "显示点按、长按和左右滑动对应的操作"
@@ -2698,7 +2557,11 @@ private fun settingDescription(title: String): String? = when (title) {
     "到勤统计" -> "导出完整人数统计，独立于明细筛选"
     "学生学号" -> "在导出的姓名前显示学号"
     "原因或备注" -> "将填写的原因附在导出的姓名后"
-    "覆盖全局点名设置" -> "为当前班级单独保存操作与显示偏好"
+    "头像确认全部材料" -> "点击学生头像，将该生本次全部材料设为已完成"
+    "显示材料统计" -> "显示材料总进度与每名学生的完成情况"
+    "显示材料操作提示" -> "显示滑动、长按和头像快捷操作说明"
+    "紧凑材料列表" -> "缩小材料卡片的间距与内边距"
+    "显示材料状态按钮" -> "显示每份材料的状态入口；隐藏后仍可长按编辑"
     else -> when {
         title.startsWith("默认折叠") -> "进入结果页时收起此分类，点击标题可展开"
         title.endsWith("学生明细") -> "在导出文本中包含此分类的学生名单"
@@ -2717,6 +2580,7 @@ private fun SettingRow(title: String, value: String, onClick: () -> Unit) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
             Text("当前：$value", style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+            SettingInheritance(title)
         }
         Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -2776,7 +2640,12 @@ private fun StatusAppearanceRow(
                 modifier = Modifier.padding(9.dp).size(18.dp),
             )
         }
-        Text(title, modifier = Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.bodyLarge)
+        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            val prefix = when (title) { "到场" -> "present"; "迟到" -> "late"; "请假" -> "leave"; "缺勤" -> "absent"; else -> "exempt" }
+            SettingInheritance("图标", prefix + "Icon")
+            SettingInheritance("颜色", prefix + "Color")
+        }
         TextButton(onClick = onIconClick) { Text(iconOption.label) }
         IconButton(onClick = onColorClick) {
             Icon(Icons.Default.Palette, contentDescription = "${title}颜色", tint = color)
@@ -2797,6 +2666,7 @@ private fun SwitchSettingRow(title: String, checked: Boolean, onCheckedChange: (
                 Text(it, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
             }
+            SettingInheritance(title)
         }
         Switch(checked = checked, onCheckedChange = null)
     }

@@ -154,9 +154,16 @@ enum class DisplayOption {
     EXPORT_LEAVE,
     EXPORT_ABSENT,
     EXPORT_EXEMPT,
+    MATERIAL_AVATAR,
+    MATERIAL_PROGRESS,
+    MATERIAL_HINT,
+    MATERIAL_COMPACT,
+    MATERIAL_STATUS_BUTTON,
 }
 
 data class ClassAttendanceSettings(
+    val values: AppSettings? = null,
+    val overriddenFields: Set<String> = emptySet(),
     val collapsedResultStatuses: Set<AttendanceStatus> = emptySet(),
     val defaultReason: String = "",
     val defaultStatus: AttendanceStatus = AttendanceStatus.PRESENT,
@@ -183,7 +190,16 @@ val resultCollapseOptions: Map<DisplayOption, AttendanceStatus> = linkedMapOf(
     DisplayOption.COLLAPSE_EXEMPT to AttendanceStatus.EXEMPT,
 )
 
+enum class ThemeSource { SYSTEM, CUSTOM }
+
 data class AppSettings(
+    val themeSource: ThemeSource = ThemeSource.SYSTEM,
+    val themeSeed: String = "#6750A4",
+    val materialAvatarCompletesAll: Boolean = true,
+    val showMaterialProgress: Boolean = true,
+    val showMaterialOperationHint: Boolean = true,
+    val compactMaterialRows: Boolean = false,
+    val showMaterialStatusButton: Boolean = true,
     val profileIcon: ProfileIconOption = ProfileIconOption.PERSON,
     val collapsedResultStatuses: Set<AttendanceStatus> = emptySet(),
     val absenceReasons: List<String> = listOf("病假", "事假", "公假", "早退", "其他"),
@@ -247,6 +263,7 @@ fun AppSettings.colorFor(status: AttendanceStatus): StatusColorOption = when (st
 
 fun AppSettings.forClass(group: ClassGroup): AppSettings {
     val custom = group.attendanceSettings ?: return this
+    if (custom.values != null) return mergeClassSettings(custom.values, custom.overriddenFields)
     return copy(
         defaultReason = custom.defaultReason.takeIf { it in absenceReasons }.orEmpty(),
         defaultStatus = custom.defaultStatus,

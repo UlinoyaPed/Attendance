@@ -1,7 +1,8 @@
 package com.ulinoyaped.attendance
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,6 +50,9 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import com.ulinoyaped.attendance.data.AppSettings
 import com.ulinoyaped.attendance.data.MaterialRecordStatus
 import com.ulinoyaped.attendance.data.MaterialTask
 
@@ -56,6 +60,7 @@ import com.ulinoyaped.attendance.data.MaterialTask
 @Composable
 internal fun MaterialTaskScreen(
     task: MaterialTask,
+    settings: AppSettings,
     onBack: () -> Unit,
     onSetStatus: (String, String, MaterialRecordStatus) -> Unit,
     onCompleteStudent: (String) -> Unit,
@@ -87,8 +92,11 @@ internal fun MaterialTaskScreen(
                 Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp)) {
                         Text("${task.materials.joinToString("、") { it.name }}", style = MaterialTheme.typography.titleMedium)
-                        Text("已完成 $done/$total · 不合格 $rejected", style = MaterialTheme.typography.bodyMedium)
-                        Text("点击学生头像确认该生全部材料", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
+                        if (settings.showMaterialProgress) Text("已完成 $done/$total · 不合格 $rejected", style = MaterialTheme.typography.bodyMedium)
+                        if (settings.showMaterialOperationHint) Text(
+                            "右滑确认 · 左滑不合格 · 长按修改状态" + if (settings.materialAvatarCompletesAll) " · 头像确认全部" else "",
+                            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp),
+                        )
                     }
                 }
             }
@@ -103,7 +111,7 @@ internal fun MaterialTaskScreen(
                     shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
                 ) {
-                    Column(Modifier.fillMaxWidth().padding(14.dp, 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(14.dp, if (settings.compactMaterialRows) 6.dp else 10.dp), verticalArrangement = Arrangement.spacedBy(if (settings.compactMaterialRows) 4.dp else 8.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             val complete = completedForStudent == task.materials.size
                             val avatarColor = when {
@@ -111,7 +119,7 @@ internal fun MaterialTaskScreen(
                                 complete -> materialStatusColor(MaterialRecordStatus.COMPLETED)
                                 else -> MaterialTheme.colorScheme.surfaceVariant
                             }
-                            Surface(onClick = { onCompleteStudent(student.id) }, modifier = Modifier.size(48.dp), shape = CircleShape, color = avatarColor) {
+                            Surface(onClick = { onCompleteStudent(student.id) }, enabled = settings.materialAvatarCompletesAll, modifier = Modifier.size(48.dp), shape = CircleShape, color = avatarColor) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         when {
@@ -121,9 +129,8 @@ internal fun MaterialTaskScreen(
                                         },
                                         contentDescription = "确认${student.name}的全部材料",
                                         tint = if (rejectedForStudent > 0) MaterialTheme.colorScheme.onError
-                                            else if (complete) {
-                                                if (isSystemInDarkTheme()) Color(0xFF143D2C) else Color.White
-                                            } else MaterialTheme.colorScheme.onSurface,
+                                            else if (complete) MaterialTheme.colorScheme.onPrimary
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.size(18.dp),
                                     )
                                 }
@@ -132,9 +139,9 @@ internal fun MaterialTaskScreen(
                             StudentIdentityText(
                                 student = student,
                                 detail = listOfNotNull(
-                                    student.studentNumber.takeIf { it.isNotBlank() },
-                                    "已完成 $completedForStudent/${task.materials.size}",
-                                    "不合格 $rejectedForStudent".takeIf { rejectedForStudent > 0 },
+                                    student.studentNumber.takeIf { settings.showStudentNumbers && it.isNotBlank() },
+                                    "已完成 $completedForStudent/${task.materials.size}".takeIf { settings.showMaterialProgress },
+                                    "不合格 $rejectedForStudent".takeIf { settings.showMaterialProgress && rejectedForStudent > 0 },
                                 ).joinToString(" · "),
                                 modifier = Modifier.weight(1f),
                             )
@@ -142,6 +149,8 @@ internal fun MaterialTaskScreen(
                         task.materials.forEach { material ->
                             val current = statusByKey[student.id to material.id]?.status ?: MaterialRecordStatus.PENDING
                             MaterialRecordRow(
+                                showStatusButton = settings.showMaterialStatusButton,
+                                compact = settings.compactMaterialRows,
                                 recordKey = "${task.id}/${student.id}/${material.id}",
                                 onReject = { onSetStatus(student.id, material.id, MaterialRecordStatus.REJECTED) },
                                 onComplete = { onSetStatus(student.id, material.id, MaterialRecordStatus.COMPLETED) },
@@ -203,9 +212,12 @@ internal fun MaterialTaskScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MaterialRecordRow(
     recordKey: String,
+    showStatusButton: Boolean,
+    compact: Boolean,
     onReject: () -> Unit,
     onComplete: () -> Unit,
     name: String,
@@ -213,7 +225,12 @@ private fun MaterialRecordRow(
     onToggle: () -> Unit,
     onEdit: () -> Unit,
 ) {
-    val tint = materialStatusColor(status)
+    val scheme = MaterialTheme.colorScheme
+    val tint = when (status) {
+        MaterialRecordStatus.PENDING -> scheme.onSurfaceVariant
+        MaterialRecordStatus.COMPLETED -> scheme.onPrimary
+        MaterialRecordStatus.REJECTED -> scheme.onErrorContainer
+    }
     SwipeRecordContainer(
         key = recordKey,
         left = SwipeActionVisual("不合格", MaterialTheme.colorScheme.error, Icons.Default.Close),
@@ -222,12 +239,18 @@ private fun MaterialRecordRow(
         onSwipeRight = onComplete,
     ) { swipeModifier ->
         Surface(
-            modifier = swipeModifier.fillMaxWidth().clickable(onClick = onToggle),
+            modifier = swipeModifier.fillMaxWidth().combinedClickable(onClick = onToggle, onLongClick = onEdit),
             shape = RoundedCornerShape(12.dp),
-            color = tint.copy(alpha = if (status == MaterialRecordStatus.PENDING) 0.12f else 0.27f).compositeOver(MaterialTheme.colorScheme.surfaceContainerLow),
+            color = when (status) {
+                MaterialRecordStatus.PENDING -> scheme.surface
+                MaterialRecordStatus.COMPLETED -> scheme.primary
+                MaterialRecordStatus.REJECTED -> scheme.errorContainer
+            },
+            contentColor = tint,
+            border = if (status == MaterialRecordStatus.PENDING) BorderStroke(1.dp, scheme.outlineVariant) else null,
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = if (compact) 2.dp else 5.dp, bottom = if (compact) 2.dp else 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
@@ -244,7 +267,7 @@ private fun MaterialRecordRow(
                     Text(name, style = MaterialTheme.typography.bodyLarge)
                     Text(materialStatusLabel(status), style = MaterialTheme.typography.bodySmall, color = tint)
                 }
-                TextButton(onClick = onEdit) { Text("状态") }
+                if (showStatusButton) TextButton(onClick = onEdit, colors = ButtonDefaults.textButtonColors(contentColor = tint)) { Text("状态") }
             }
         }
     }
@@ -252,8 +275,8 @@ private fun MaterialRecordRow(
 
 @Composable
 private fun materialStatusColor(status: MaterialRecordStatus): Color = when (status) {
-    MaterialRecordStatus.PENDING -> MaterialTheme.colorScheme.secondary
-    MaterialRecordStatus.COMPLETED -> if (isSystemInDarkTheme()) Color(0xFF80D6AC) else Color(0xFF237453)
+    MaterialRecordStatus.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
+    MaterialRecordStatus.COMPLETED -> MaterialTheme.colorScheme.primary
     MaterialRecordStatus.REJECTED -> MaterialTheme.colorScheme.error
 }
 

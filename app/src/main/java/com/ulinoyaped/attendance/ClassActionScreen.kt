@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.ulinoyaped.attendance.data.AppSettings
 import com.ulinoyaped.attendance.data.ClassGroup
 import com.ulinoyaped.attendance.data.ProfileIconOption
 
@@ -53,6 +54,7 @@ import com.ulinoyaped.attendance.data.ProfileIconOption
 internal fun ClassActionScreen(
     group: ClassGroup?,
     profileIcon: ProfileIconOption,
+    settings: AppSettings,
     onChooseClass: () -> Unit,
     onStartAttendance: () -> Unit,
     onStartMaterials: (String, List<String>) -> Unit,
@@ -76,9 +78,12 @@ internal fun ClassActionScreen(
         ) {
             item {
                 Text(group?.name ?: "尚未选择班级", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-                Text(
+                if (group == null || settings.showClassStudentCount || settings.showClassOperationHint) Text(
                     if (group == null) "点击右上角头像创建或选择班级。"
-                    else "${group.students.size} 名学生 · 点击右上角头像切换班级",
+                    else listOfNotNull(
+                        "${group.students.size} 名学生".takeIf { settings.showClassStudentCount },
+                        "点击右上角头像切换班级".takeIf { settings.showClassOperationHint },
+                    ).joinToString(" · "),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 5.dp, bottom = 8.dp),

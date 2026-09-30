@@ -373,6 +373,13 @@ class AttendanceRepository internal constructor(private val preferences: android
         saveClasses()
     }
 
+    fun setAbsenceReasons(reasons: List<String>) {
+        require(reasons.size <= 100 && reasons.distinct().size == reasons.size) { "原因重复或数量超限" }
+        reasons.forEach { requireSafeField(it, "原因", 240) }
+        updateSettings(_settings.value.copy(absenceReasons = reasons,
+            defaultReason = _settings.value.defaultReason.takeIf { it in reasons }.orEmpty()))
+    }
+
     fun moveAbsenceReason(fromIndex: Int, toIndex: Int) {
         val reasons = _settings.value.absenceReasons.toMutableList()
         if (fromIndex !in reasons.indices || toIndex !in reasons.indices || fromIndex == toIndex) return
@@ -415,6 +422,11 @@ class AttendanceRepository internal constructor(private val preferences: android
         updateSettings(updated)
     }
 
+    fun setTheme(source: ThemeSource, seed: String) {
+        require(Regex("#[0-9a-fA-F]{6}").matches(seed)) { "请输入 #RRGGBB 颜色" }
+        updateSettings(_settings.value.copy(themeSource = source, themeSeed = seed.uppercase(java.util.Locale.ROOT)))
+    }
+
     fun setProfileIcon(icon: ProfileIconOption) = updateSettings(_settings.value.copy(profileIcon = icon))
 
     fun setStatusColor(status: AttendanceStatus, color: StatusColorOption) {
@@ -430,6 +442,14 @@ class AttendanceRepository internal constructor(private val preferences: android
     }
 
     fun setClassAttendanceSettings(classId: String, settings: ClassAttendanceSettings?) {
+        require(settings == null || settings.defaultStatus != AttendanceStatus.UNMARKED) { "默认状态无效" }
+        if (settings != null) settings.values?.let { values ->
+            require(settings.overriddenFields.all { it in classOverrideFields }) { "班级覆写字段无效" }
+            require(values.defaultStatus != AttendanceStatus.UNMARKED) { "默认状态无效" }
+            require(values.absenceReasons.size <= 100 && values.absenceReasons.distinct().size == values.absenceReasons.size) { "原因重复或数量超限" }
+            values.absenceReasons.forEach { requireSafeField(it, "原因", 240) }
+            requireSafeField(values.defaultReason, "默认原因", 240, required = false)
+        }
         updateClass(classId) { it.copy(attendanceSettings = settings) }
     }
 
@@ -440,34 +460,7 @@ class AttendanceRepository internal constructor(private val preferences: android
         updateSettings(_settings.value.copy(historyTitleMode = mode))
 
     fun setDisplayOption(option: DisplayOption, enabled: Boolean) {
-        val collapseStatus = resultCollapseOptions[option]
-        if (collapseStatus != null) {
-            val current = _settings.value.collapsedResultStatuses
-            updateSettings(_settings.value.copy(
-                collapsedResultStatuses = if (enabled) current + collapseStatus else current - collapseStatus,
-            ))
-            return
-        }
-        val updated = when (option) {
-            DisplayOption.STUDENT_NUMBERS -> _settings.value.copy(showStudentNumbers = enabled)
-            DisplayOption.CLASS_STUDENT_COUNT -> _settings.value.copy(showClassStudentCount = enabled)
-            DisplayOption.CLASS_OPERATION_HINT -> _settings.value.copy(showClassOperationHint = enabled)
-            DisplayOption.ROLL_CALL_PROGRESS -> _settings.value.copy(showRollCallProgress = enabled)
-            DisplayOption.OPERATION_HINT -> _settings.value.copy(showOperationHint = enabled)
-            DisplayOption.STATUS_BUTTON -> _settings.value.copy(showStatusButton = enabled)
-            DisplayOption.REASONS_IN_ROLL_CALL -> _settings.value.copy(showReasonsInRollCall = enabled)
-            DisplayOption.RESULT_SUMMARY -> _settings.value.copy(showResultSummary = enabled)
-            DisplayOption.EMPTY_RESULT_GROUPS -> _settings.value.copy(showEmptyResultGroups = enabled)
-            DisplayOption.HISTORY_STATISTICS -> _settings.value.copy(showHistoryStatistics = enabled)
-            DisplayOption.CONFIRM_INCOMPLETE -> _settings.value.copy(confirmIncompleteAttendance = enabled)
-            DisplayOption.COMPACT_ROLL_CALL -> _settings.value.copy(compactRollCallRows = enabled)
-            DisplayOption.EXPORT_LATE -> _settings.value.copy(exportLateStudents = enabled)
-            DisplayOption.EXPORT_LEAVE -> _settings.value.copy(exportLeaveStudents = enabled)
-            DisplayOption.EXPORT_ABSENT -> _settings.value.copy(exportAbsentStudents = enabled)
-            DisplayOption.EXPORT_EXEMPT -> _settings.value.copy(exportExemptStudents = enabled)
-            else -> return
-        }
-        updateSettings(updated)
+        updateSettings(_settings.value.withDisplayOption(option, enabled))
     }
 
     fun exportBackup(): String = writer.submit<String> {
@@ -540,7 +533,7 @@ class AttendanceRepository internal constructor(private val preferences: android
                     .put("id", group.id)
                     .put("name", group.name)
                     .put("students", students)
-                    .put("attendanceSettings", group.attendanceSettings?.toJson() ?: JSONObject.NULL)
+                    .put("attendanceSettings", group.attendanceSettings?.let(::classSettingsToJson) ?: JSONObject.NULL)
                     .put("situations", JSONArray().apply {
                         group.situations.forEach { situation -> put(JSONObject()
                             .put("id", situation.id)
@@ -682,6 +675,13 @@ class AttendanceRepository internal constructor(private val preferences: android
     private fun settingsToJson(settings: AppSettings): JSONObject {
         val reasons = JSONArray().apply { settings.absenceReasons.forEach { put(it) } }
         return JSONObject()
+            .put("themeSource", settings.themeSource.name)
+            .put("themeSeed", settings.themeSeed)
+            .put("materialAvatarCompletesAll", settings.materialAvatarCompletesAll)
+            .put("showMaterialProgress", settings.showMaterialProgress)
+            .put("showMaterialOperationHint", settings.showMaterialOperationHint)
+            .put("compactMaterialRows", settings.compactMaterialRows)
+            .put("showMaterialStatusButton", settings.showMaterialStatusButton)
             .put("profileIcon", settings.profileIcon.name)
             .put("absenceReasons", reasons)
             .put("defaultReason", settings.defaultReason)
@@ -725,6 +725,22 @@ class AttendanceRepository internal constructor(private val preferences: android
             .put("exportReason", settings.exportReason)
     }
 
+    private fun classSettingsToJson(custom: ClassAttendanceSettings): JSONObject = custom.toJson().apply {
+        custom.values?.let {
+            put("values", settingsToJson(it))
+            put("overriddenFields", JSONArray(custom.overriddenFields.toList()))
+        }
+    }
+
+    private fun parseClassSettings(json: JSONObject): ClassAttendanceSettings {
+        val legacy = json.toClassAttendanceSettings()
+        val values = json.optJSONObject("values") ?: return legacy
+        val names = json.getJSONArray("overriddenFields")
+        val fields = (0 until names.length()).map { names.getString(it) }.toSet()
+        require(fields.size == names.length() && fields.all { it in classOverrideFields }) { "班级覆写字段无效" }
+        return legacy.copy(values = parseSettings(values.toString()), overriddenFields = fields)
+    }
+
     private fun loadClasses(): List<ClassGroup> = runCatching {
         parseClasses(preferences.getString(KEY_CLASSES, "[]").orEmpty())
     }.onFailure { loadFailed = true; _storageError.value = "本地数据损坏，已停止自动保存。请导出原始数据或恢复备份。" }.getOrDefault(emptyList())
@@ -752,7 +768,7 @@ class AttendanceRepository internal constructor(private val preferences: android
                         id = item.getString("id"),
                         name = item.getString("name"),
                         students = students,
-                        attendanceSettings = item.optJSONObject("attendanceSettings")?.toClassAttendanceSettings(),
+                        attendanceSettings = item.optJSONObject("attendanceSettings")?.let(::parseClassSettings),
                         situations = item.optJSONArray("situations")?.let { situations -> buildList {
                             for (situationIndex in 0 until situations.length()) {
                                 val situation = situations.getJSONObject(situationIndex)
@@ -900,6 +916,13 @@ class AttendanceRepository internal constructor(private val preferences: android
         }
         require(!json.has("defaultStatus") || json.getString("defaultStatus") in AttendanceStatus.entries.filter { it != AttendanceStatus.UNMARKED }.map { it.name })
         return defaults.copy(
+            themeSource = enumValueOrDefault(json.optString("themeSource"), defaults.themeSource),
+            themeSeed = json.optString("themeSeed", defaults.themeSeed).also { require(Regex("#[0-9a-fA-F]{6}").matches(it)) },
+            materialAvatarCompletesAll = json.optBoolean("materialAvatarCompletesAll", defaults.materialAvatarCompletesAll),
+            showMaterialProgress = json.optBoolean("showMaterialProgress", defaults.showMaterialProgress),
+            showMaterialOperationHint = json.optBoolean("showMaterialOperationHint", defaults.showMaterialOperationHint),
+            compactMaterialRows = json.optBoolean("compactMaterialRows", defaults.compactMaterialRows),
+            showMaterialStatusButton = json.optBoolean("showMaterialStatusButton", defaults.showMaterialStatusButton),
             profileIcon = enumValueOrDefault(json.optString("profileIcon"), defaults.profileIcon),
             absenceReasons = reasons.distinct(),
             defaultReason = json.optString("defaultReason").takeIf { it in reasons }.orEmpty(),

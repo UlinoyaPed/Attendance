@@ -18,6 +18,23 @@ fun validateBackup(root: JSONObject) {
         return ids
     }
     fun settings(obj: JSONObject) {
+        if (obj.has("values")) {
+            val fields = obj.getJSONArray("overriddenFields")
+            val keys = (0 until fields.length()).map { fields.getString(it) }
+            require(keys.distinct().size == keys.size && keys.all { it in classOverrideFields }) { "班级覆写字段无效" }
+            val values = obj.getJSONObject("values")
+            require(!values.has("values")) { "班级设置嵌套无效" }
+            settings(values)
+        } else require(!obj.has("overriddenFields")) { "班级覆写内容缺失" }
+        if (obj.has("absenceReasons")) {
+            val reasons = obj.getJSONArray("absenceReasons")
+            require(reasons.length() <= 100) { "原因数量超限" }
+            val items = (0 until reasons.length()).map { reasons.getString(it) }
+            require(items.distinct().size == items.size) { "原因重复" }
+            items.forEach { requireSafeField(it, "原因", 240) }
+            require(obj.optString("defaultReason").isEmpty() || obj.optString("defaultReason") in items) { "默认原因不存在" }
+        }
+        if (obj.has("themeSeed")) require(Regex("#[0-9a-fA-F]{6}").matches(obj.getString("themeSeed"))) { "主题颜色无效" }
         if (obj.has("defaultStatus")) {
             require(obj.getString("defaultStatus") in AttendanceStatus.entries.filter { it != AttendanceStatus.UNMARKED }.map { it.name }) {
                 "默认点名状态无效"
@@ -27,11 +44,12 @@ fun validateBackup(root: JSONObject) {
         for (key in obj.keys()) {
             val value = obj.get(key)
             if (key.startsWith("show") || key.startsWith("export") ||
-                key in listOf("groupResultsByStatus", "confirmIncompleteAttendance", "compactRollCallRows")) {
+                key in listOf("groupResultsByStatus", "confirmIncompleteAttendance", "compactRollCallRows", "compactMaterialRows", "materialAvatarCompletesAll")) {
                 require(value is Boolean) { "$key 必须是开关值" }
             }
             val choices = when {
                 key in listOf("longPressAction", "swipeLeftAction", "swipeRightAction") -> GestureAction.entries.map { it.name }
+                key == "themeSource" -> ThemeSource.entries.map { it.name }
                 key == "profileIcon" -> ProfileIconOption.entries.map { it.name }
                 key.endsWith("Icon") -> StatusIconOption.entries.map { it.name }
                 key.endsWith("Color") -> StatusColorOption.entries.map { it.name }
