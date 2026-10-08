@@ -272,7 +272,9 @@ class AttendanceRepository internal constructor(private val preferences: android
                 require(status == MaterialRecordStatus.PENDING || task.records.any {
                     it.studentId == studentId && it.materialId == materialId
                 } || task.records.size < 20_000) { "材料登记数量已达上限" }
-                task.copy(
+                val current = task.records.firstOrNull { it.studentId == studentId && it.materialId == materialId }?.status
+                    ?: MaterialRecordStatus.PENDING
+                if (current == status) task else task.copy(
                     updatedAt = System.currentTimeMillis(),
                     records = task.records.filterNot {
                         it.studentId == studentId && it.materialId == materialId
@@ -285,21 +287,44 @@ class AttendanceRepository internal constructor(private val preferences: android
         })
     }
 
-    fun completeStudentMaterials(classId: String, taskId: String, studentId: String) = updateClass(classId) { group ->
+    fun completeStudentMaterials(classId: String, taskId: String, studentId: String, overwriteRejected: Boolean = false) = updateClass(classId) { group ->
         require(group.materialTasks.any { it.id == taskId }) { "材料任务不存在" }
         group.copy(materialTasks = group.materialTasks.map { task ->
             if (task.id != taskId) task else {
                 require(task.participants.any { it.id == studentId }) { "本次登记中没有该学生" }
-                val remaining = task.records.filterNot { it.studentId == studentId }
-                require(remaining.size + task.materials.size <= 20_000) { "材料登记数量已达上限" }
-                task.copy(
+                val existing = task.records.filter { it.studentId == studentId }.associateBy { it.materialId }
+                val additions = task.materials.filter {
+                    existing[it.id]?.status != MaterialRecordStatus.COMPLETED &&
+                        (overwriteRejected || existing[it.id]?.status == null || existing[it.id]?.status == MaterialRecordStatus.PENDING)
+                }
+                val replacedIds = additions.mapTo(mutableSetOf()) { it.id }
+                val records = task.records.filterNot { it.studentId == studentId && it.materialId in replacedIds } +
+                    additions.map { MaterialRecord(studentId, it.id, MaterialRecordStatus.COMPLETED) }
+                require(records.size <= 20_000) { "材料登记数量已达上限" }
+                if (records == task.records) task else task.copy(
                     updatedAt = System.currentTimeMillis(),
-                    records = remaining + task.materials.map {
-                        MaterialRecord(studentId, it.id, MaterialRecordStatus.COMPLETED)
-                    },
+                    records = records,
                 )
             }
         })
+    }
+
+    /** Restore one UI operation atomically, only while its result is still current. */
+    internal fun restoreMaterialRecords(
+        classId: String, taskId: String, expected: List<MaterialRecord>, before: List<MaterialRecord>,
+    ): Boolean {
+        val task = _classes.value.firstOrNull { it.id == classId }?.materialTasks?.firstOrNull { it.id == taskId }
+            ?: return false
+        if (task.records != expected) return false
+        require(before.size <= 20_000)
+        require(before.map { it.studentId to it.materialId }.distinct().size == before.size)
+        val students = task.participants.mapTo(mutableSetOf()) { it.id }
+        val materials = task.materials.mapTo(mutableSetOf()) { it.id }
+        require(before.all { it.studentId in students && it.materialId in materials })
+        updateClass(classId) { group -> group.copy(materialTasks = group.materialTasks.map {
+            if (it.id == taskId) it.copy(records = before.toList(), updatedAt = System.currentTimeMillis()) else it
+        }) }
+        return true
     }
 
     fun setMaterialTaskCompleted(classId: String, taskId: String, completed: Boolean) = updateClass(classId) { group ->

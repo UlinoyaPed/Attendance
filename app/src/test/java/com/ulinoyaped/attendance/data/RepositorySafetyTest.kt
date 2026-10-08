@@ -172,13 +172,18 @@ class RepositorySafetyTest {
         assertEquals(listOf("Saved"), repository.classes.value.map { it.name })
     }
 
-    @Test fun duplicateReasonsAreNormalizedOnRestore() {
-        val repository = AttendanceRepository(Store().preferences)
-        val root = JSONObject(repository.exportBackup())
+    @Test fun duplicateReasonsAreRejectedWithoutChangingSavedData() {
+        val store = Store()
+        val repository = AttendanceRepository(store.preferences)
+        repository.addClass("Demo")
+        assertTrue(repository.awaitSaved())
+        val before = repository.exportBackup()
+        val saved = store.values.toMap()
+        val root = JSONObject(before)
         root.getJSONObject("settings").put("absenceReasons", org.json.JSONArray(listOf("病假", "病假")))
-        assertTrue(repository.importBackup(root.toString()))
-        assertEquals(listOf("病假"), repository.settings.value.absenceReasons)
-        assertEquals(1, JSONObject(repository.exportBackup()).getJSONObject("settings").getJSONArray("absenceReasons").length())
+        assertFalse(repository.importBackup(root.toString()))
+        assertEquals(before, repository.exportBackup())
+        assertEquals(saved, store.values.toMap())
     }
 
     @Test fun removingSharedReasonUpdatesClassSettingsAtomically() {
@@ -261,6 +266,10 @@ class RepositorySafetyTest {
         repository.completeStudentMaterials(classId, taskId, students[0].id)
         assertTrue(repository.awaitSaved())
         assertEquals(before + 1, store.commits.size)
+        val protectedTask = repository.classes.value.single().materialTasks.single()
+        assertEquals(1, protectedTask.records.count { it.studentId == students[0].id && it.status == MaterialRecordStatus.COMPLETED })
+        assertEquals(MaterialRecordStatus.REJECTED, protectedTask.records.single { it.studentId == students[0].id && it.materialId == material.id }.status)
+        repository.completeStudentMaterials(classId, taskId, students[0].id, overwriteRejected = true)
         val task = repository.classes.value.single().materialTasks.single()
         assertEquals(2, task.records.count { it.studentId == students[0].id && it.status == MaterialRecordStatus.COMPLETED })
         assertEquals(MaterialRecordStatus.REJECTED, task.records.single { it.studentId == students[1].id }.status)
@@ -268,6 +277,82 @@ class RepositorySafetyTest {
         assertEquals(task.records, repository.classes.value.single().materialTasks.single().records)
         assertTrue(repository.awaitSaved())
         assertEquals(task.records, AttendanceRepository(store.preferences).classes.value.single().materialTasks.single().records)
+    }
+
+    @Test fun materialUndoRestoresWholeBatchAndSurvivesBackupWithoutChangingSnapshotOrCompletion() {
+        val store = Store()
+        val repository = AttendanceRepository(store.preferences)
+        repository.addClass("Demo")
+        val classId = repository.classes.value.single().id
+        repository.addStudent(classId, "Alice", "001")
+        repository.addStudent(classId, "Bob", "002")
+        val students = repository.classes.value.single().students
+        val taskId = repository.createMaterialTask(classId, "Materials", listOf("A", "B", "C"))
+        fun task() = repository.classes.value.single().materialTasks.single()
+        repository.setMaterialRecord(classId, taskId, students[0].id, task().materials[0].id, MaterialRecordStatus.REJECTED)
+        repository.setMaterialRecord(classId, taskId, students[0].id, task().materials[1].id, MaterialRecordStatus.COMPLETED)
+        repository.setMaterialRecord(classId, taskId, students[1].id, task().materials[0].id, MaterialRecordStatus.REJECTED)
+        repository.setMaterialTaskCompleted(classId, taskId, true)
+        val before = task()
+        repository.completeStudentMaterials(classId, taskId, students[0].id, overwriteRejected = true)
+        val after = task().records
+        assertTrue(repository.awaitSaved())
+        val writes = store.commits.size
+        assertTrue(repository.restoreMaterialRecords(classId, taskId, after, before.records))
+        assertTrue(repository.awaitSaved())
+        assertEquals(writes + 1, store.commits.size)
+        assertEquals(before.records, task().records)
+        assertEquals(before.participants, task().participants)
+        assertEquals(before.materials, task().materials)
+        assertEquals(before.createdAt, task().createdAt)
+        assertEquals(before.completedAt, task().completedAt)
+        assertTrue(task().updatedAt >= before.updatedAt)
+        val restored = AttendanceRepository(store.preferences)
+        assertEquals(task(), restored.classes.value.single().materialTasks.single())
+        assertTrue(restored.importBackup(repository.exportBackup()))
+        assertEquals(task(), restored.classes.value.single().materialTasks.single())
+    }
+
+    @Test fun materialUndoRefusesToOverwriteNewerChangesAndCanRestoreClearedRecord() {
+        val repository = AttendanceRepository(Store().preferences)
+        repository.addClass("Demo")
+        val classId = repository.classes.value.single().id
+        repository.addStudent(classId, "Alice", "001")
+        val studentId = repository.classes.value.single().students.single().id
+        val taskId = repository.createMaterialTask(classId, "Materials", listOf("A", "B"))
+        fun task() = repository.classes.value.single().materialTasks.single()
+        val original = task().records
+        repository.setMaterialRecord(classId, taskId, studentId, task().materials[0].id, MaterialRecordStatus.REJECTED)
+        val afterFirst = task().records
+        repository.setMaterialRecord(classId, taskId, studentId, task().materials[1].id, MaterialRecordStatus.COMPLETED)
+        assertFalse(repository.restoreMaterialRecords(classId, taskId, afterFirst, original))
+        val beforeClear = task().records
+        repository.setMaterialRecord(classId, taskId, studentId, task().materials[0].id, MaterialRecordStatus.PENDING)
+        assertTrue(repository.restoreMaterialRecords(classId, taskId, task().records, beforeClear))
+        assertEquals(beforeClear, task().records)
+        repository.deleteMaterialTask(classId, taskId)
+        assertFalse(repository.restoreMaterialRecords(classId, taskId, beforeClear, original))
+    }
+
+    @Test fun undoingClearRecreatesOnlyCurrentDraftAndKeepsOriginalTimestamp() {
+        val store = Store()
+        val repository = AttendanceRepository(store.preferences)
+        repository.addClass("Demo")
+        val classId = repository.classes.value.single().id
+        repository.addStudent(classId, "Alice", "001")
+        val student = repository.classes.value.single().students.single()
+        val entry = AttendanceEntry(student.id, student.name, student.studentNumber, AttendanceStatus.LEAVE, "比赛")
+        repository.saveRollCallDraft("current", classId, 10, listOf(entry))
+        repository.saveRollCallDraft("other", classId, 20, listOf(entry.copy(status = AttendanceStatus.PRESENT, reason = "")))
+        val other = repository.getRollCallDraft("other")
+        repository.saveRollCallDraft("current", classId, 10, emptyList())
+        assertNull(repository.getRollCallDraft("current"))
+        repository.saveRollCallDraft("current", classId, 10, listOf(entry))
+        assertEquals(listOf(entry), repository.getRollCallDraft("current")!!.entries)
+        assertEquals(10L, repository.getRollCallDraft("current")!!.createdAt)
+        assertEquals(other, repository.getRollCallDraft("other"))
+        assertTrue(repository.awaitSaved())
+        assertEquals(repository.drafts.value, AttendanceRepository(store.preferences).drafts.value)
     }
 
     @Test fun materialTaskTracksEachStudentAndMaterialIndependently() {

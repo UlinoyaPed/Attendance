@@ -83,6 +83,8 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -112,6 +114,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -144,6 +147,12 @@ import com.ulinoyaped.attendance.data.RollCallDraft
 import com.ulinoyaped.attendance.data.MaterialTask
 import com.ulinoyaped.attendance.data.MaterialRecordStatus
 import com.ulinoyaped.attendance.data.AttendanceStatus
+import com.ulinoyaped.attendance.data.AttendanceMark as Mark
+import com.ulinoyaped.attendance.data.RollCallFilter
+import com.ulinoyaped.attendance.data.filterRollCallStudents
+import com.ulinoyaped.attendance.data.batchAttendanceMarks
+import com.ulinoyaped.attendance.data.batchAttendanceReasons
+import com.ulinoyaped.attendance.data.isException
 import com.ulinoyaped.attendance.data.AppSettings
 import com.ulinoyaped.attendance.data.ClassGroup
 import com.ulinoyaped.attendance.data.ClassAttendanceSettings
@@ -215,11 +224,6 @@ private enum class RootTab(val label: String) {
     HISTORY("历史"),
     SETTINGS("设置"),
 }
-
-private data class Mark(
-    val status: AttendanceStatus,
-    val reason: String = "",
-)
 
 private sealed interface DraftHistoryRow {
     val key: String
@@ -489,7 +493,15 @@ fun AttendanceApp() {
                 onSetStatus = { studentId, materialId, status ->
                     repository.setMaterialRecord(group.id, task.id, studentId, materialId, status)
                 },
-                onCompleteStudent = { repository.completeStudentMaterials(group.id, task.id, it) },
+                onCompleteStudent = { studentId, overwriteRejected ->
+                    repository.completeStudentMaterials(group.id, task.id, studentId, overwriteRejected)
+                },
+                onReadRecords = {
+                    repository.classes.value.first { it.id == group.id }.materialTasks.first { it.id == task.id }.records
+                },
+                onRestoreRecords = { expected, before ->
+                    repository.restoreMaterialRecords(group.id, task.id, expected, before)
+                },
                 onSetCompleted = { repository.setMaterialTaskCompleted(group.id, task.id, it) },
                 onDelete = {
                     repository.deleteMaterialTask(group.id, task.id)
@@ -1206,7 +1218,19 @@ private fun RollCallScreen(
     var showClearDraftDialog by remember(group.id, draftKey) { mutableStateOf(false) }
     var showSituations by remember(group.id, draftKey) { mutableStateOf(false) }
     var finishing by remember(group.id, draftKey) { mutableStateOf(false) }
+    val undo = rememberRecentOperationUndo("${group.id}/$draftKey")
+    var query by rememberSaveable(group.id, draftKey) { mutableStateOf("") }
+    var filter by rememberSaveable(group.id, draftKey) { mutableStateOf(RollCallFilter.ALL) }
+    var selecting by remember(group.id, draftKey) { mutableStateOf(false) }
+    var selectedIds by remember(group.id, draftKey) { mutableStateOf(emptySet<String>()) }
+    var showBatchMenu by remember { mutableStateOf(false) }
+    var showBatchDialog by remember { mutableStateOf(false) }
     val checked = group.students.count { marks[it.id]?.status != null }
+    val exceptionCount = marks.values.count { it.status.isException() }
+    val visibleStudents = filterRollCallStudents(group.students, marks, query, filter)
+    val listState = rememberLazyListState()
+    LaunchedEffect(query, filter) { listState.scrollToItem(0) }
+    BackHandler(enabled = selecting) { selecting = false; selectedIds = emptySet() }
 
     fun persistMarks() {
         onDraftChange(
@@ -1224,19 +1248,44 @@ private fun RollCallScreen(
         )
     }
 
-    fun updateMark(student: Student, mark: Mark?) {
-        if (mark == null) marks.remove(student.id) else marks[student.id] = mark
+    fun commitMarks(after: Map<String, Mark>, message: String) {
+        if (finishing) return
+        val before = marks.toMap()
+        if (before == after) return
+        marks.clear()
+        marks.putAll(after)
         persistMarks()
+        undo.offer(message) {
+            marks.clear()
+            marks.putAll(before)
+            persistMarks()
+        }
+    }
+
+    fun updateMark(student: Student, mark: Mark?) {
+        val after = marks.toMutableMap()
+        if (mark == null) after.remove(student.id) else after[student.id] = mark
+        commitMarks(after, if (mark == null) "已清除${student.name}的标记" else "已将${student.name}标记为${mark.status.label}")
+    }
+
+    fun fillUnmarked(status: AttendanceStatus) {
+        val ids = group.students.mapTo(mutableSetOf()) { it.id }
+        val after = batchAttendanceMarks(marks, ids, Mark(status, effectiveSettings.defaultReason))
+        val changed = ids.count { after[it] != marks[it] }
+        commitMarks(after, "已将 $changed 名未处理学生标记为${status.label}")
+        showBatchMenu = false
     }
 
     fun applySituation(situationId: String) {
         val situation = group.situations.firstOrNull { it.id == situationId } ?: return
+        val studentIds = group.students.mapTo(mutableSetOf()) { it.id }
+        val after = marks.toMutableMap()
         situation.assignments.forEach { assignment ->
-            if (group.students.any { it.id == assignment.studentId }) {
-                marks[assignment.studentId] = Mark(assignment.status, assignment.reason)
+            if (assignment.studentId in studentIds) {
+                after[assignment.studentId] = Mark(assignment.status, assignment.reason)
             }
         }
-        persistMarks()
+        commitMarks(after, "已应用情况：${situation.name}")
         showSituations = false
     }
 
@@ -1255,6 +1304,7 @@ private fun RollCallScreen(
     fun finish() {
         if (finishing) return
         finishing = true
+        undo.clear()
         val entries = group.students.map { student ->
             val mark = marks[student.id] ?: Mark(AttendanceStatus.ABSENT, effectiveSettings.defaultReason)
             AttendanceEntry(
@@ -1280,99 +1330,168 @@ private fun RollCallScreen(
                     }
                 },
                 actions = {
+                    TextButton(onClick = { showBatchMenu = true }, enabled = !finishing) { Text("批量") }
                     if (group.situations.isNotEmpty()) IconButton(onClick = { showSituations = true }) {
                         Icon(Icons.Default.EventBusy, contentDescription = "应用班级情况")
                     }
-                    TextButton(
-                        onClick = { showClearDraftDialog = true },
-                        enabled = marks.isNotEmpty(),
-                    ) { Text("清空标记") }
                 },
             )
         },
+        snackbarHost = { SnackbarHost(undo.host) },
         bottomBar = {
             Surface(shadowElevation = 8.dp) {
-                Button(
-                    onClick = {
-                        if (
-                            checked < group.students.size &&
-                            effectiveSettings.confirmIncompleteAttendance
-                        ) {
-                            showFinishDialog = true
-                        } else {
-                            finish()
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth().padding(16.dp).height(50.dp),
-                    enabled = !finishing,
-                ) { Text(if (finishing) "正在保存…" else "结束并查看结果") }
+                Column {
+                    TextButton(onClick = { query = ""; filter = RollCallFilter.EXCEPTIONS }, modifier = Modifier.fillMaxWidth()) {
+                        Text("复核异常 $exceptionCount 人")
+                    }
+                    Button(
+                        onClick = {
+                            if (
+                                checked < group.students.size &&
+                                effectiveSettings.confirmIncompleteAttendance
+                            ) {
+                                showFinishDialog = true
+                            } else {
+                                finish()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(16.dp).height(50.dp),
+                        enabled = !finishing,
+                    ) { Text(if (finishing) "正在保存…" else "结束并查看结果") }
+                }
             }
         },
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 24.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (effectiveSettings.showRollCallProgress || effectiveSettings.showOperationHint) {
-                item {
-                    Column(modifier = Modifier.padding(bottom = 6.dp)) {
-                        if (effectiveSettings.showRollCallProgress) {
-                            Text(
-                                "$checked / ${group.students.size} 已处理",
-                                style = MaterialTheme.typography.titleMedium,
-                            )
-                        }
-                        if (effectiveSettings.showOperationHint) {
-                            Text(
-                                "点按：${effectiveSettings.defaultStatus.label} · 长按：${effectiveSettings.longPressAction.label} · 左滑：${effectiveSettings.swipeLeftAction.label} · 右滑：${effectiveSettings.swipeRightAction.label}",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            Text(
-                                "已标记内容自动保存，可从历史页继续",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                RollCallSearchTools(query, { query = it }, filter, { filter = it })
+                if (selecting) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("已选 ${selectedIds.size} 人", modifier = Modifier.weight(1f))
+                        TextButton(onClick = { showBatchDialog = true }, enabled = selectedIds.isNotEmpty()) { Text("处理") }
+                        TextButton(onClick = { selecting = false; selectedIds = emptySet() }) { Text("退出") }
+                    }
+                    Row {
+                        TextButton(onClick = { selectedIds = selectedIds + visibleStudents.map { it.id } }) { Text("选择当前结果") }
+                        TextButton(onClick = { selectedIds = emptySet() }, enabled = selectedIds.isNotEmpty()) { Text("清除选择") }
+                    }
+                    Text("筛选后仍保留已选学生；处理范围为全部已选学生。", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+                state = listState,
+                contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 24.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (effectiveSettings.showRollCallProgress || effectiveSettings.showOperationHint) {
+                    item {
+                        Column(modifier = Modifier.padding(bottom = 6.dp)) {
+                            if (effectiveSettings.showRollCallProgress) {
+                                Text(
+                                    "$checked / ${group.students.size} 已处理",
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                            }
+                            if (effectiveSettings.showOperationHint) {
+                                Text(
+                                    "点按：${effectiveSettings.defaultStatus.label} · 长按：${effectiveSettings.longPressAction.label} · 左滑：${effectiveSettings.swipeLeftAction.label} · 右滑：${effectiveSettings.swipeRightAction.label}",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                )
+                                Text(
+                                    "已标记内容自动保存，可从历史页继续",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
                         }
                     }
                 }
-            }
-            items(group.students, key = { "student-${it.id}" }) { student ->
-                val mark = marks[student.id]
-                RollCallItem(
-                    student = student,
-                    mark = mark,
-                    iconOption = mark?.status?.let { effectiveSettings.iconFor(it) },
-                    colorOption = mark?.status?.let { effectiveSettings.colorFor(it) },
-                    showStudentNumber = effectiveSettings.showStudentNumbers,
-                    showReason = effectiveSettings.showReasonsInRollCall,
-                    showStatusButton = effectiveSettings.showStatusButton,
-                    compact = effectiveSettings.compactRollCallRows,
-                    onTogglePresent = {
-                        if (mark?.status == effectiveSettings.defaultStatus) {
-                            updateMark(student, null)
-                        } else {
-                            updateMark(
-                                student,
-                                Mark(
-                                    effectiveSettings.defaultStatus,
-                                    effectiveSettings.defaultReason.takeIf {
-                                        statusUsesReason(effectiveSettings.defaultStatus)
-                                    }.orEmpty(),
-                                ),
-                            )
+                if (visibleStudents.isEmpty()) item { HintCard("没有符合条件的学生，切换筛选或清除搜索后继续。") }
+                items(visibleStudents, key = { "student-${it.id}" }) { student ->
+                    val mark = marks[student.id]
+                    if (selecting) {
+                        val toggle = { selectedIds = if (student.id in selectedIds) selectedIds - student.id else selectedIds + student.id }
+                        Card(Modifier.fillMaxWidth().clickable(onClick = toggle)) {
+                            Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = student.id in selectedIds, onCheckedChange = { toggle() })
+                                StudentIdentityText(
+                                    student,
+                                    listOfNotNull(
+                                        student.studentNumber.takeIf { effectiveSettings.showStudentNumbers && it.isNotBlank() },
+                                        mark?.status?.label ?: "未处理",
+                                        mark?.reason?.takeIf { effectiveSettings.showReasonsInRollCall && it.isNotBlank() },
+                                    ).joinToString(" · "),
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
                         }
-                    },
-                    onLongPress = { applyAction(student, effectiveSettings.longPressAction) },
-                    onSwipeLeft = { applyAction(student, effectiveSettings.swipeLeftAction) },
-                    onSwipeRight = { applyAction(student, effectiveSettings.swipeRightAction) },
-                    swipeSettings = effectiveSettings,
-                    onEdit = { editingStudent = student },
-                )
+                    } else {
+                        RollCallItem(
+                            student = student,
+                            mark = mark,
+                            iconOption = mark?.status?.let { effectiveSettings.iconFor(it) },
+                            colorOption = mark?.status?.let { effectiveSettings.colorFor(it) },
+                            showStudentNumber = effectiveSettings.showStudentNumbers,
+                            showReason = effectiveSettings.showReasonsInRollCall,
+                            showStatusButton = effectiveSettings.showStatusButton,
+                            compact = effectiveSettings.compactRollCallRows,
+                            onTogglePresent = {
+                                if (mark?.status == effectiveSettings.defaultStatus) {
+                                    updateMark(student, null)
+                                } else {
+                                    updateMark(
+                                        student,
+                                        Mark(
+                                            effectiveSettings.defaultStatus,
+                                            effectiveSettings.defaultReason.takeIf {
+                                                statusUsesReason(effectiveSettings.defaultStatus)
+                                            }.orEmpty(),
+                                        ),
+                                    )
+                                }
+                            },
+                            onLongPress = { applyAction(student, effectiveSettings.longPressAction) },
+                            onSwipeLeft = { applyAction(student, effectiveSettings.swipeLeftAction) },
+                            onSwipeRight = { applyAction(student, effectiveSettings.swipeRightAction) },
+                            swipeSettings = effectiveSettings,
+                            onEdit = { editingStudent = student },
+                        )
+                    }
+                }
             }
         }
     }
+
+    if (showBatchMenu) AlertDialog(
+        onDismissRequest = { showBatchMenu = false },
+        title = { Text("批量处理") },
+        text = { Column {
+            Text("以下两项处理全班所有未处理学生，不受当前搜索或筛选影响，已有状态和原因保持不变。")
+            TextButton(onClick = { fillUnmarked(AttendanceStatus.PRESENT) }, enabled = checked < group.students.size) { Text("所有未处理 → 到场") }
+            TextButton(onClick = { fillUnmarked(AttendanceStatus.ABSENT) }, enabled = checked < group.students.size) { Text("所有未处理 → 缺勤") }
+            TextButton(onClick = { selecting = true; showBatchMenu = false }) { Text("选择学生，统一设置状态或原因") }
+            TextButton(onClick = { showBatchMenu = false; showClearDraftDialog = true }, enabled = marks.isNotEmpty()) { Text("清空本次标记…") }
+        } },
+        confirmButton = { TextButton(onClick = { showBatchMenu = false }) { Text("关闭") } },
+    )
+    if (showBatchDialog) AttendanceBatchDialog(
+        count = selectedIds.size,
+        markedCount = selectedIds.count { marks[it] != null },
+        exceptionCount = selectedIds.count { marks[it]?.status?.isException() == true },
+        presetReasons = effectiveSettings.absenceReasons,
+        onDismiss = { showBatchDialog = false },
+        onApply = { mark, overwrite, reasonsOnly ->
+            val after = if (reasonsOnly) batchAttendanceReasons(marks, selectedIds, mark.reason)
+                else batchAttendanceMarks(marks, selectedIds, mark, overwrite)
+            val changed = selectedIds.count { after[it] != marks[it] }
+            commitMarks(after, if (reasonsOnly) "已修改 $changed 人的原因" else "已将 $changed 人标记为${mark.status.label}")
+            showBatchDialog = false
+            selecting = false
+            selectedIds = emptySet()
+        },
+    )
 
     editingStudent?.let { student ->
         StatusDialog(
@@ -1396,7 +1515,7 @@ private fun RollCallScreen(
             onDismissRequest = { showSituations = false },
             title = { Text("复用班级情况") },
             text = { Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("仅覆写情况中已定义的学生，其他点名结果保持不变。")
+                Text("仅覆写情况中已定义的学生；重复应用时后应用的情况覆盖前一个。只影响本次点名，其他学生保持不变。")
                 group.situations.forEach { situation ->
                     OutlinedButton(onClick = { applySituation(situation.id) }, modifier = Modifier.fillMaxWidth()) {
                         Text("${situation.name} · ${situation.assignments.size} 人")
@@ -1412,11 +1531,10 @@ private fun RollCallScreen(
         AlertDialog(
             onDismissRequest = { showClearDraftDialog = false },
             title = { Text("清空本次点名标记？") },
-            text = { Text("将清除本班本次点名的全部状态和原因，所有学生恢复为未点。空草稿会自动删除，已完成的记录仍保留。其他点名记录不受影响，此操作无法撤销。") },
+            text = { Text("将清除本次全部状态和原因，所有学生恢复为未点；空草稿会自动删除。编辑历史时也会保存清空结果。可通过底部提示短时间撤销。") },
             confirmButton = {
                 TextButton(onClick = {
-                    onDraftChange(emptyList())
-                    marks.clear()
+                    commitMarks(emptyMap(), "已清空本次点名标记")
                     editingStudent = null
                     showFinishDialog = false
                     showClearDraftDialog = false
@@ -1459,6 +1577,9 @@ private fun ResultScreen(
     val scope = rememberCoroutineScope()
     var showExportDialog by remember { mutableStateOf(false) }
     var entryToEdit by remember { mutableStateOf<AttendanceEntry?>(null) }
+    val undo = rememberRecentOperationUndo(session.id)
+    var exceptionsOnly by rememberSaveable(session.id) { mutableStateOf(false) }
+    val displayedEntries = if (exceptionsOnly) session.entries.filter { it.status.isException() } else session.entries
     var collapsedStatuses by remember(session.id, effectiveSettings.collapsedResultStatuses) {
         mutableStateOf(effectiveSettings.collapsedResultStatuses)
     }
@@ -1508,7 +1629,12 @@ private fun ResultScreen(
                 },
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
+        snackbarHost = {
+            Column {
+                SnackbarHost(snackbarHostState)
+                SnackbarHost(undo.host)
+            }
+        },
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
@@ -1520,6 +1646,14 @@ private fun ResultScreen(
                 Text(
                     formatTime(session.createdAt),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                FilterChip(
+                    selected = exceptionsOnly,
+                    onClick = {
+                        exceptionsOnly = !exceptionsOnly
+                        if (exceptionsOnly) collapsedStatuses = collapsedStatuses.filterNot { it.isException() }.toSet()
+                    },
+                    label = { Text("仅查看异常 ${session.entries.count { it.status.isException() }} 人") },
                 )
             }
             if (effectiveSettings.showResultSummary) {
@@ -1542,7 +1676,8 @@ private fun ResultScreen(
             }
             if (effectiveSettings.groupResultsByStatus) {
                 resultStatuses.forEach { status ->
-                    val entries = session.entries.filter { it.status == status }
+                    val entries = displayedEntries.filter { it.status == status }
+                    if (exceptionsOnly && !status.isException()) return@forEach
                     if (entries.isNotEmpty() || effectiveSettings.showEmptyResultGroups) {
                         item(key = "section-${status.name}") {
                             TextButton(
@@ -1578,8 +1713,8 @@ private fun ResultScreen(
                     }
                 }
             } else {
-                item { SectionTitle("人员明细 · ${session.entries.size}") }
-                items(session.entries, key = { it.studentId }) { entry ->
+                item { SectionTitle("人员明细 · ${displayedEntries.size}") }
+                items(displayedEntries, key = { it.studentId }) { entry ->
                     CompactResultItem(
                         entry = entry,
                         settings = effectiveSettings,
@@ -1587,6 +1722,7 @@ private fun ResultScreen(
                     )
                 }
             }
+            if (exceptionsOnly && displayedEntries.isEmpty()) item { HintCard("本次没有异常学生") }
         }
     }
 
@@ -1643,7 +1779,12 @@ private fun ResultScreen(
             defaultReason = effectiveSettings.defaultReason,
             onDismiss = { entryToEdit = null },
             onConfirm = { mark ->
-                onUpdateEntry(entry.studentId, mark.status, mark.reason)
+                if (entry.status != mark.status || entry.reason != mark.reason) {
+                    onUpdateEntry(entry.studentId, mark.status, mark.reason)
+                    undo.offer("已将${entry.studentName}标记为${mark.status.label}") {
+                        onUpdateEntry(entry.studentId, entry.status, entry.reason)
+                    }
+                }
                 entryToEdit = null
             },
         )
@@ -1968,7 +2109,7 @@ private fun SettingsScreen(
                         if (displayedPage == "材料") {
                             item {
                                 SettingsGroup(title = "材料登记", subtitle = "控制快捷操作、提示与列表密度") {
-                                    SwitchSettingRow("头像确认全部材料", settings.materialAvatarCompletesAll) { onSetDisplayOption(DisplayOption.MATERIAL_AVATAR, it) }
+                                    SwitchSettingRow("头像快捷确认材料", settings.materialAvatarCompletesAll) { onSetDisplayOption(DisplayOption.MATERIAL_AVATAR, it) }
                                     SwitchSettingRow("显示材料统计", settings.showMaterialProgress) { onSetDisplayOption(DisplayOption.MATERIAL_PROGRESS, it) }
                                     SwitchSettingRow("显示材料操作提示", settings.showMaterialOperationHint) { onSetDisplayOption(DisplayOption.MATERIAL_HINT, it) }
                                     SwitchSettingRow("紧凑材料列表", settings.compactMaterialRows) { onSetDisplayOption(DisplayOption.MATERIAL_COMPACT, it) }
@@ -2557,7 +2698,7 @@ private fun settingDescription(title: String): String? = when (title) {
     "到勤统计" -> "导出完整人数统计，独立于明细筛选"
     "学生学号" -> "在导出的姓名前显示学号"
     "原因或备注" -> "将填写的原因附在导出的姓名后"
-    "头像确认全部材料" -> "点击学生头像，将该生本次全部材料设为已完成"
+    "头像快捷确认材料" -> "点击学生头像确认未登记材料；覆盖不合格项需明确选择"
     "显示材料统计" -> "显示材料总进度与每名学生的完成情况"
     "显示材料操作提示" -> "显示滑动、长按和头像快捷操作说明"
     "紧凑材料列表" -> "缩小材料卡片的间距与内边距"

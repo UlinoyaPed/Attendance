@@ -61,13 +61,26 @@ class InputSafetyTest {
         assertThrows(IllegalArgumentException::class.java) { validateBackup(dangling) }
     }
 
-    @Test fun unknownAndUnmarkedStatusesAreRejected() {
-        for (status in listOf("UNKNOWN", "UNMARKED")) {
-            val root = backup()
-            root.getJSONArray("sessions").getJSONObject(0).getJSONArray("entries").getJSONObject(0).put("status", status)
-            assertThrows(IllegalArgumentException::class.java) { validateBackup(root) }
-        }
+    @Test fun unknownStatusesAreRejectedButHistoryMayContainClearedMarks() {
+        val unknown = backup()
+        unknown.getJSONArray("sessions").getJSONObject(0).getJSONArray("entries").getJSONObject(0).put("status", "UNKNOWN")
+        assertThrows(IllegalArgumentException::class.java) { validateBackup(unknown) }
+        val cleared = backup()
+        cleared.getJSONArray("sessions").getJSONObject(0).getJSONArray("entries").getJSONObject(0).put("status", "UNMARKED")
+        validateBackup(cleared) // Completed-history editing saves cleared entries without losing their snapshot.
         val root = backup().apply { getJSONObject("settings").put("defaultStatus", "UNMARKED") }
         assertThrows(IllegalArgumentException::class.java) { validateBackup(root) }
+    }
+
+    @Test fun draftsRejectUnmarkedAndUnknownStatuses() {
+        val root = backup()
+        val entry = JSONObject().put("studentId", "s").put("studentName", "Alice").put("status", "PRESENT")
+        root.getJSONArray("rollCallDrafts").put(JSONObject().put("id", "draft").put("classId", "c")
+            .put("createdAt", 1).put("updatedAt", 1).put("entries", org.json.JSONArray().put(entry)))
+        validateBackup(root)
+        for (status in listOf("UNMARKED", "UNKNOWN")) {
+            entry.put("status", status)
+            assertThrows(IllegalArgumentException::class.java) { validateBackup(root) }
+        }
     }
 }

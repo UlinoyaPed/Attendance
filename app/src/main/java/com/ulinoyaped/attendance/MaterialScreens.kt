@@ -35,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -54,6 +55,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import com.ulinoyaped.attendance.data.AppSettings
 import com.ulinoyaped.attendance.data.MaterialRecordStatus
+import com.ulinoyaped.attendance.data.MaterialRecord
 import com.ulinoyaped.attendance.data.MaterialTask
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -63,23 +65,49 @@ internal fun MaterialTaskScreen(
     settings: AppSettings,
     onBack: () -> Unit,
     onSetStatus: (String, String, MaterialRecordStatus) -> Unit,
-    onCompleteStudent: (String) -> Unit,
+    onCompleteStudent: (String, Boolean) -> Unit,
+    onReadRecords: () -> List<MaterialRecord>,
+    onRestoreRecords: (List<MaterialRecord>, List<MaterialRecord>) -> Unit,
     onSetCompleted: (Boolean) -> Unit,
     onDelete: () -> Unit,
 ) {
     var confirmDelete by remember { mutableStateOf(false) }
     var editingRecord by remember(task.id) { mutableStateOf<Pair<String, String>?>(null) }
+    var confirmingStudent by remember(task.id) { mutableStateOf<String?>(null) }
+    val undo = rememberRecentOperationUndo(task.id)
     val statusByKey = remember(task.records) { task.records.associateBy { it.studentId to it.materialId } }
+
+    fun changeRecords(message: String, action: () -> Unit) {
+        val before = onReadRecords().toList()
+        action()
+        val after = onReadRecords().toList()
+        if (before != after) undo.offer(message) { onRestoreRecords(after, before) }
+    }
+
+    fun setStatus(studentId: String, materialId: String, status: MaterialRecordStatus) {
+        val student = task.participants.first { it.id == studentId }
+        val material = task.materials.first { it.id == materialId }
+        changeRecords("${student.name} · ${material.name}已标记为${materialStatusLabel(status)}") {
+            onSetStatus(studentId, materialId, status)
+        }
+    }
+
+    fun completeStudent(studentId: String, overwriteRejected: Boolean = false) {
+        val student = task.participants.first { it.id == studentId }
+        changeRecords(if (overwriteRejected) "已确认${student.name}的全部材料" else "已确认${student.name}的未登记材料") {
+            onCompleteStudent(studentId, overwriteRejected)
+        }
+    }
     Scaffold(topBar = { TopAppBar(
         title = { Text(task.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
         actions = {
             IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "删除登记") }
-            TextButton(onClick = { onSetCompleted(task.completedAt == null) }) {
+            TextButton(onClick = { undo.clear(); onSetCompleted(task.completedAt == null) }) {
                 Text(if (task.completedAt == null) "结束登记" else "继续编辑")
             }
         },
-    ) }) { padding ->
+    ) }, snackbarHost = { SnackbarHost(undo.host) }) { padding ->
         LazyColumn(
             Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 28.dp),
@@ -94,7 +122,7 @@ internal fun MaterialTaskScreen(
                         Text("${task.materials.joinToString("、") { it.name }}", style = MaterialTheme.typography.titleMedium)
                         if (settings.showMaterialProgress) Text("已完成 $done/$total · 不合格 $rejected", style = MaterialTheme.typography.bodyMedium)
                         if (settings.showMaterialOperationHint) Text(
-                            "右滑确认 · 左滑不合格 · 长按修改状态" + if (settings.materialAvatarCompletesAll) " · 头像确认全部" else "",
+                            "右滑确认 · 左滑不合格 · 长按修改状态" + if (settings.materialAvatarCompletesAll) " · 头像确认未登记材料" else "",
                             style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp),
                         )
                     }
@@ -119,7 +147,10 @@ internal fun MaterialTaskScreen(
                                 complete -> materialStatusColor(MaterialRecordStatus.COMPLETED)
                                 else -> MaterialTheme.colorScheme.surfaceVariant
                             }
-                            Surface(onClick = { onCompleteStudent(student.id) }, enabled = settings.materialAvatarCompletesAll, modifier = Modifier.size(48.dp), shape = CircleShape, color = avatarColor) {
+                            Surface(onClick = {
+                                if (onReadRecords().any { it.studentId == student.id && it.status == MaterialRecordStatus.REJECTED }) confirmingStudent = student.id
+                                else completeStudent(student.id)
+                            }, enabled = settings.materialAvatarCompletesAll, modifier = Modifier.size(48.dp), shape = CircleShape, color = avatarColor) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         when {
@@ -152,12 +183,12 @@ internal fun MaterialTaskScreen(
                                 showStatusButton = settings.showMaterialStatusButton,
                                 compact = settings.compactMaterialRows,
                                 recordKey = "${task.id}/${student.id}/${material.id}",
-                                onReject = { onSetStatus(student.id, material.id, MaterialRecordStatus.REJECTED) },
-                                onComplete = { onSetStatus(student.id, material.id, MaterialRecordStatus.COMPLETED) },
+                                onReject = { setStatus(student.id, material.id, MaterialRecordStatus.REJECTED) },
+                                onComplete = { setStatus(student.id, material.id, MaterialRecordStatus.COMPLETED) },
                                 name = material.name,
                                 status = current,
                                 onToggle = {
-                                    onSetStatus(
+                                    setStatus(
                                         student.id,
                                         material.id,
                                         if (current == MaterialRecordStatus.COMPLETED) MaterialRecordStatus.PENDING
@@ -192,13 +223,13 @@ internal fun MaterialTaskScreen(
                         MaterialRecordStatus.entries.forEach { status ->
                             Row(
                                 modifier = Modifier.fillMaxWidth().clickable {
-                                    onSetStatus(studentId, materialId, status)
+                                    setStatus(studentId, materialId, status)
                                     editingRecord = null
                                 }.padding(vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 RadioButton(selected = current == status, onClick = {
-                                    onSetStatus(studentId, materialId, status)
+                                    setStatus(studentId, materialId, status)
                                     editingRecord = null
                                 })
                                 Text(materialStatusLabel(status))
@@ -209,6 +240,20 @@ internal fun MaterialTaskScreen(
                 confirmButton = { TextButton(onClick = { editingRecord = null }) { Text("取消") } },
             )
         }
+    }
+    confirmingStudent?.let { studentId ->
+        val student = task.participants.first { it.id == studentId }
+        val rejected = onReadRecords().count { it.studentId == studentId && it.status == MaterialRecordStatus.REJECTED }
+        AlertDialog(
+            onDismissRequest = { confirmingStudent = null },
+            title = { Text("${student.name}有 $rejected 份不合格材料") },
+            text = { Column {
+                Text("默认保留不合格结果，只确认未登记材料。")
+                TextButton(onClick = { completeStudent(studentId, true); confirmingStudent = null }) { Text("覆盖不合格，确认全部材料") }
+            } },
+            confirmButton = { TextButton(onClick = { completeStudent(studentId); confirmingStudent = null }) { Text("只确认未登记") } },
+            dismissButton = { TextButton(onClick = { confirmingStudent = null }) { Text("取消") } },
+        )
     }
 }
 

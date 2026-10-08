@@ -35,7 +35,7 @@ private val settingFields = mapOf(
     "请假学生明细" to "exportLeaveStudents", "缺勤学生明细" to "exportAbsentStudents",
     "不参与学生明细" to "exportExemptStudents", "学生学号" to "exportStudentNumber",
     "原因或备注" to "exportReason", "记录标题" to "historyTitleMode",
-    "头像确认全部材料" to "materialAvatarCompletesAll", "显示材料统计" to "showMaterialProgress",
+    "头像快捷确认材料" to "materialAvatarCompletesAll", "显示材料统计" to "showMaterialProgress",
     "显示材料操作提示" to "showMaterialOperationHint", "紧凑材料列表" to "compactMaterialRows",
     "显示材料状态按钮" to "showMaterialStatusButton",
 )
