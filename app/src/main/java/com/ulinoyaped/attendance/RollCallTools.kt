@@ -56,6 +56,7 @@ internal fun RollCallSearchTools(
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
             trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { onQueryChange("") }) { Text("清除") } },
+            shape = MaterialTheme.shapes.small,
         )
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             LazyRow(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -133,6 +134,7 @@ internal fun AttendanceBatchDialog(
                     value = reason,
                     onValueChange = { reason = it.take(240).filterNot { c -> c.isISOControl() || c == '\u2028' || c == '\u2029' } },
                     label = { Text("原因（留空则清除原因）") }, modifier = Modifier.fillMaxWidth(), maxLines = 3,
+                    shape = MaterialTheme.shapes.small,
                 )
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     items(presetReasons) { preset -> AssistChip(onClick = { reason = preset }, label = { Text(preset) }) }

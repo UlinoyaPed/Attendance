@@ -1,7 +1,10 @@
 package com.ulinoyaped.attendance
 
+import com.ulinoyaped.attendance.ui.theme.statusTone
+import com.ulinoyaped.attendance.ui.theme.statusSurface
+import com.ulinoyaped.attendance.data.StatusColorOption
+import com.ulinoyaped.attendance.ui.theme.LocalAttendanceLayout
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,8 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
@@ -27,8 +28,6 @@ import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -48,7 +47,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -117,19 +115,19 @@ internal fun MaterialTaskScreen(
         LazyColumn(
             Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 28.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(LocalAttendanceLayout.current.groupGap),
         ) {
             item {
                 val total = task.participants.size * task.materials.size
                 val done = task.records.count { it.status == MaterialRecordStatus.COMPLETED }
                 val rejected = task.records.count { it.status == MaterialRecordStatus.REJECTED }
-                Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                Column {
                     Column(Modifier.fillMaxWidth().padding(16.dp)) {
                         Text("${task.materials.joinToString("、") { it.name }}", style = MaterialTheme.typography.titleMedium)
                         if (settings.showMaterialProgress) Text("已完成 $done/$total · 不合格 $rejected", style = MaterialTheme.typography.bodyMedium)
                         if (settings.showMaterialOperationHint) Text(
                             "右滑确认 · 左滑不合格 · 长按修改状态" + if (settings.materialAvatarCompletesAll) " · 头像确认未登记材料" else "",
-                            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp),
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp),
                         )
                     }
                 }
@@ -141,22 +139,19 @@ internal fun MaterialTaskScreen(
                 val rejectedForStudent = task.materials.count { material ->
                     statusByKey[student.id to material.id]?.status == MaterialRecordStatus.REJECTED
                 }
-                Card(
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-                ) {
+                AttendancePanel {
                     Column(Modifier.fillMaxWidth().padding(14.dp, if (settings.compactMaterialRows) 6.dp else 10.dp), verticalArrangement = Arrangement.spacedBy(if (settings.compactMaterialRows) 4.dp else 8.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             val complete = completedForStudent == task.materials.size
                             val avatarColor = when {
-                                rejectedForStudent > 0 -> MaterialTheme.colorScheme.error
+                                rejectedForStudent > 0 -> materialStatusColor(MaterialRecordStatus.REJECTED)
                                 complete -> materialStatusColor(MaterialRecordStatus.COMPLETED)
-                                else -> MaterialTheme.colorScheme.surfaceVariant
+                                else -> materialStatusColor(MaterialRecordStatus.PENDING)
                             }
                             Surface(onClick = {
                                 if (onReadRecords().any { it.studentId == student.id && it.status == MaterialRecordStatus.REJECTED }) confirmingStudent = student.id
                                 else completeStudent(student.id)
-                            }, enabled = settings.materialAvatarCompletesAll, modifier = Modifier.size(48.dp), shape = CircleShape, color = avatarColor) {
+                            }, enabled = settings.materialAvatarCompletesAll, modifier = Modifier.size(48.dp), shape = MaterialTheme.shapes.small, color = statusSurface(avatarColor)) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
                                         when {
@@ -165,9 +160,7 @@ internal fun MaterialTaskScreen(
                                             else -> Icons.Default.Person
                                         },
                                         contentDescription = "确认${student.name}的未登记材料",
-                                        tint = if (rejectedForStudent > 0) MaterialTheme.colorScheme.onError
-                                            else if (complete) MaterialTheme.colorScheme.onPrimary
-                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        tint = avatarColor,
                                         modifier = Modifier.size(18.dp),
                                     )
                                 }
@@ -183,7 +176,8 @@ internal fun MaterialTaskScreen(
                                 modifier = Modifier.weight(1f),
                             )
                         }
-                        task.materials.forEach { material ->
+                        task.materials.forEachIndexed { index, material ->
+                            if (index > 0) androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
                             val current = statusByKey[student.id to material.id]?.status ?: MaterialRecordStatus.PENDING
                             MaterialRecordRow(
                                 showStatusButton = settings.showMaterialStatusButton,
@@ -257,7 +251,7 @@ internal fun MaterialTaskScreen(
             title = { Text("${student.name}有 $rejected 份不合格材料") },
             text = { Text("还有 $pending 份未登记。默认保留不合格结果，只确认未登记材料。") },
             confirmButton = { Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
-                Button(
+                Button(shape = MaterialTheme.shapes.small,
                     onClick = { completeStudent(studentId); confirmingStudent = null },
                     enabled = pending > 0, modifier = Modifier.fillMaxWidth(),
                 ) { Text("只确认 $pending 份未登记") }
@@ -285,28 +279,19 @@ private fun MaterialRecordRow(
     onEdit: () -> Unit,
 ) {
     val scheme = MaterialTheme.colorScheme
-    val tint = when (status) {
-        MaterialRecordStatus.PENDING -> scheme.onSurfaceVariant
-        MaterialRecordStatus.COMPLETED -> scheme.onPrimary
-        MaterialRecordStatus.REJECTED -> scheme.onErrorContainer
-    }
+    val tint = materialStatusColor(status)
     SwipeRecordContainer(
         key = recordKey,
-        left = SwipeActionVisual("不合格", MaterialTheme.colorScheme.error, Icons.Default.Close),
+        left = SwipeActionVisual("不合格", materialStatusColor(MaterialRecordStatus.REJECTED), Icons.Default.Close),
         right = SwipeActionVisual("已完成", materialStatusColor(MaterialRecordStatus.COMPLETED), Icons.Default.CheckCircle),
         onSwipeLeft = onReject,
         onSwipeRight = onComplete,
     ) { swipeModifier ->
         Surface(
             modifier = swipeModifier.fillMaxWidth().combinedClickable(onClick = onToggle, onLongClick = onEdit),
-            shape = RoundedCornerShape(12.dp),
-            color = when (status) {
-                MaterialRecordStatus.PENDING -> scheme.surface
-                MaterialRecordStatus.COMPLETED -> scheme.primary
-                MaterialRecordStatus.REJECTED -> scheme.errorContainer
-            },
-            contentColor = tint,
-            border = if (status == MaterialRecordStatus.PENDING) BorderStroke(1.dp, scheme.outlineVariant) else null,
+            shape = MaterialTheme.shapes.small,
+            color = scheme.surface,
+            contentColor = scheme.onSurface,
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = if (compact) 2.dp else 5.dp, bottom = if (compact) 2.dp else 5.dp),
@@ -334,9 +319,9 @@ private fun MaterialRecordRow(
 
 @Composable
 private fun materialStatusColor(status: MaterialRecordStatus): Color = when (status) {
-    MaterialRecordStatus.PENDING -> MaterialTheme.colorScheme.onSurfaceVariant
-    MaterialRecordStatus.COMPLETED -> MaterialTheme.colorScheme.primary
-    MaterialRecordStatus.REJECTED -> MaterialTheme.colorScheme.error
+    MaterialRecordStatus.PENDING -> statusTone(StatusColorOption.GRAY)
+    MaterialRecordStatus.COMPLETED -> statusTone(StatusColorOption.GREEN)
+    MaterialRecordStatus.REJECTED -> statusTone(StatusColorOption.RED)
 }
 
 private fun materialStatusLabel(status: MaterialRecordStatus): String = when (status) {
@@ -353,12 +338,13 @@ internal fun MaterialTaskCreateDialog(onDismiss: () -> Unit, onConfirm: (String,
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("开始材料登记") },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedTextField(title, { title = safeMaterialText(it, 120) }, label = { Text("本次登记名称") }, singleLine = true)
+        text = { Column(verticalArrangement = Arrangement.spacedBy(LocalAttendanceLayout.current.groupGap)) {
+            OutlinedTextField(title, { title = safeMaterialText(it, 120) }, label = { Text("本次登记名称") }, singleLine = true, shape = MaterialTheme.shapes.small)
             OutlinedTextField(
                 materials, { materials = safeMaterialText(it, 3000, allowNewline = true) },
                 label = { Text("材料名称，每行一份") }, minLines = 4, maxLines = 8,
                 supportingText = { Text("已填写 ${names.size} 份") },
+                shape = MaterialTheme.shapes.small,
             )
         } },
         confirmButton = { TextButton(onClick = { onConfirm(title.trim(), names) }, enabled = title.isNotBlank() && names.isNotEmpty() && names.size <= 20) { Text("开始") } },

@@ -51,8 +51,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import com.ulinoyaped.attendance.ui.theme.AttendanceText
+import com.ulinoyaped.attendance.ui.theme.statusTone
+import com.ulinoyaped.attendance.ui.theme.statusSurface
+import com.ulinoyaped.attendance.ui.theme.LocalAttendanceLayout
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -82,8 +85,6 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.DropdownMenu
@@ -130,7 +131,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -679,7 +679,7 @@ private fun RootScreen(
 @Composable
 private fun RootNavigationBar(selectedTab: RootTab, onSelectTab: (RootTab) -> Unit) {
     NavigationBar(
-        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        containerColor = MaterialTheme.colorScheme.surface,
         tonalElevation = 0.dp,
     ) {
         RootTab.entries.forEach { tab ->
@@ -755,7 +755,7 @@ private fun ClassesScreen(
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
                 contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 96.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(LocalAttendanceLayout.current.rowGap),
             ) {
                 if (settings.showClassOperationHint) {
                     item {
@@ -768,64 +768,25 @@ private fun ClassesScreen(
                     }
                 }
                 items(classes, key = { it.id }) { group ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .combinedClickable(
-                                onClick = { onOpenClass(group.id) },
-                                onLongClick = { classToManage = group },
-                            ),
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (group.id == selectedClassId) MaterialTheme.colorScheme.secondaryContainer
-                            else MaterialTheme.colorScheme.surfaceContainerLow,
+                    AttendanceListRow(
+                        modifier = Modifier.fillMaxWidth().combinedClickable(
+                            onClick = { onOpenClass(group.id) }, onLongClick = { classToManage = group },
                         ),
+                        accent = group.id == selectedClassId,
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(14.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Surface(
-                                modifier = Modifier.size(50.dp),
-                                shape = RoundedCornerShape(16.dp),
-                                color = MaterialTheme.colorScheme.primaryContainer,
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        Icons.Default.Groups,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    )
-                                }
+                        Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, top = 10.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            val selected = group.id == selectedClassId
+                            Icon(Icons.Default.Groups, null,
+                                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(28.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(group.name, style = MaterialTheme.typography.titleMedium)
+                                if (settings.forClass(group).showClassStudentCount) Text("${group.students.size} 名学生",
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                if (selected) Text("当前班级", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                             }
-                            Spacer(Modifier.width(14.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    group.name,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                                if (settings.forClass(group).showClassStudentCount) {
-                                    Text(
-                                        "${group.students.size} 名学生${if (group.id == selectedClassId) " · 当前班级" else ""}",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                            Surface(
-                                modifier = Modifier.size(40.dp),
-                                shape = CircleShape,
-                                color = MaterialTheme.colorScheme.primary,
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        Icons.Default.ChevronRight,
-                                        contentDescription = "切换到${group.name}",
-                                        tint = MaterialTheme.colorScheme.onPrimary,
-                                    )
-                                }
-                            }
+                            IconButton(onClick = { classToManage = group }) { Icon(Icons.Default.Edit, "管理${group.name}", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
                         }
                     }
                 }
@@ -980,10 +941,10 @@ private fun ClassDetailScreen(
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 32.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(LocalAttendanceLayout.current.rowGap),
         ) {
             item {
-                Button(
+                Button(shape = MaterialTheme.shapes.small,
                     onClick = onStart,
                     enabled = group.students.isNotEmpty(),
                     modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -996,16 +957,16 @@ private fun ClassDetailScreen(
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    OutlinedButton(
+                    OutlinedButton(shape = MaterialTheme.shapes.small,
                         onClick = { showAddStudent = true },
                         modifier = Modifier.weight(1f),
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                         Text("手动添加", modifier = Modifier.padding(start = 5.dp))
                     }
-                    OutlinedButton(
+                    OutlinedButton(shape = MaterialTheme.shapes.small,
                         onClick = { showImportOptions = true },
                         modifier = Modifier.weight(1f),
                     ) {
@@ -1015,7 +976,7 @@ private fun ClassDetailScreen(
                 }
             }
             item {
-                OutlinedButton(
+                OutlinedButton(shape = MaterialTheme.shapes.small,
                     onClick = { showRosterExport = true },
                     enabled = group.students.isNotEmpty(),
                     modifier = Modifier.fillMaxWidth(),
@@ -1025,7 +986,7 @@ private fun ClassDetailScreen(
                 }
             }
             item {
-                OutlinedButton(onClick = onOpenSituations, modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(shape = MaterialTheme.shapes.small, onClick = onOpenSituations, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.EventBusy, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("班级情况 · ${group.situations.size}", modifier = Modifier.padding(start = 5.dp))
                 }
@@ -1093,7 +1054,7 @@ private fun ClassDetailScreen(
             text = {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = MaterialTheme.shapes.small,
                 ) {
                     Text(
                         rosterText,
@@ -1401,8 +1362,8 @@ private fun RollCallScreen(
         },
         snackbarHost = { SnackbarHost(undo.host) },
         bottomBar = {
-            Surface(shadowElevation = 8.dp) {
-                Button(
+            Surface(color = MaterialTheme.colorScheme.background) {
+                Button(shape = MaterialTheme.shapes.small,
                     onClick = {
                         if (
                             checked < group.students.size &&
@@ -1420,19 +1381,19 @@ private fun RollCallScreen(
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            Column(Modifier.padding(horizontal = 16.dp)) {
+            Column(Modifier.padding(horizontal = LocalAttendanceLayout.current.pageInset)) {
                 RollCallSearchTools(query, { query = it }, filter, { filter = it })
             }
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
                 state = listState,
                 contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 24.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(LocalAttendanceLayout.current.rowGap),
             ) {
                 if (effectiveSettings.showRollCallProgress || effectiveSettings.showOperationHint || exceptionCount > 0) {
                     item {
                         Column(modifier = Modifier.padding(bottom = 6.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 if (effectiveSettings.showRollCallProgress) Text(
                                     "$checked / ${group.students.size} 已处理", modifier = Modifier.weight(1f),
                                     style = MaterialTheme.typography.titleMedium,
@@ -1462,7 +1423,7 @@ private fun RollCallScreen(
                     val mark = marks[student.id]
                     if (selecting) {
                         val toggle = { selectedIds = if (student.id in selectedIds) selectedIds - student.id else selectedIds + student.id }
-                        Card(Modifier.fillMaxWidth().clickable(onClick = toggle)) {
+                        AttendanceListRow(Modifier.fillMaxWidth().clickable(onClick = toggle), accent = student.id in selectedIds) {
                             Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Checkbox(checked = student.id in selectedIds, onCheckedChange = { toggle() })
                                 StudentIdentityText(
@@ -1555,7 +1516,7 @@ private fun RollCallScreen(
             text = { Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("仅覆写情况中已定义的学生；重复应用时后应用的情况覆盖前一个。只影响本次点名，其他学生保持不变。")
                 group.situations.forEach { situation ->
-                    OutlinedButton(onClick = { applySituation(situation.id) }, modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(shape = MaterialTheme.shapes.small, onClick = { applySituation(situation.id) }, modifier = Modifier.fillMaxWidth()) {
                         Text("${situation.name} · ${situation.assignments.size} 人")
                     }
                 }
@@ -1774,7 +1735,7 @@ private fun ResultScreen(
             text = {
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = MaterialTheme.shapes.small,
                 ) {
                     Text(
                         exportText,
@@ -1874,7 +1835,7 @@ private fun HistoryScreen(
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(padding),
                 contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 24.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(LocalAttendanceLayout.current.rowGap),
             ) {
                 if (draftRows.isNotEmpty()) item { SectionTitle("草稿") }
                 items(draftRows, key = { it.key }) { row ->
@@ -1939,14 +1900,11 @@ private fun HistoryScreen(
 private fun MaterialHistoryItem(className: String, task: MaterialTask, settings: AppSettings, onClick: () -> Unit) {
     val completed = task.records.count { it.status == MaterialRecordStatus.COMPLETED }
     val rejected = task.records.count { it.status == MaterialRecordStatus.REJECTED }
-    Card(
+    AttendanceListRow(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(
-            containerColor = if (task.completedAt == null) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceContainer,
-        ),
-        shape = RoundedCornerShape(22.dp),
+        accent = task.completedAt == null,
     ) { Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Default.Inventory2, null)
+        Icon(Icons.Default.Inventory2, null, tint = if (task.completedAt == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(task.title, style = MaterialTheme.typography.titleMedium)
@@ -1954,6 +1912,7 @@ private fun MaterialHistoryItem(className: String, task: MaterialTask, settings:
                 "材料登记 · ${if (settings.historyTitleMode == HistoryTitleMode.TIME) formatTime(task.updatedAt) else className.ifBlank { "班级" }} · ${task.materials.size} 份" +
                     if (settings.showHistoryStatistics) " · 完成 $completed · 不合格 $rejected" else "",
                 style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         TextButton(onClick = onClick) { Text(if (task.completedAt == null) "继续" else "编辑") }
@@ -1968,12 +1927,13 @@ private fun DraftHistoryItem(
     onContinue: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card(
+    AttendanceListRow(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onContinue),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-        shape = RoundedCornerShape(22.dp),
+        accent = true,
     ) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 val resolvedClassName = className.ifBlank { "已删除的班级" }
                 Text(
@@ -1983,6 +1943,7 @@ private fun DraftHistoryItem(
                 Text(
                     "${if (titleMode == HistoryTitleMode.CLASS_NAME) formatTime(draft.updatedAt) else resolvedClassName} · 已标记 ${draft.entries.size} 人",
                     style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             TextButton(onClick = onContinue) { Text("继续") }
@@ -2605,7 +2566,7 @@ private val settingsDestinations = listOf(
         SettingsDestination("原因", "未到原因", "常用原因、默认选择与拖动排序", Icons.Default.EventBusy),
     ),
     listOf(
-        SettingsDestination("外观", "外观与头像", "头像、点名状态图标与颜色", Icons.Default.Palette),
+        SettingsDestination("外观", "外观与头像", "主题风格、头像与点名状态外观", Icons.Default.Palette),
         SettingsDestination("显示", "界面显示", "控件、文字、紧凑布局与默认折叠", Icons.Default.Person),
         SettingsDestination("结果", "结果排列", "按状态分类或显示完整人员列表", Icons.Default.Groups),
     ),
@@ -2618,87 +2579,43 @@ private val settingsDestinations = listOf(
 
 @Composable
 private fun SettingsDestinationGroup(destinations: List<SettingsDestination>, onOpen: (String) -> Unit) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.07f)
-            .compositeOver(MaterialTheme.colorScheme.surface),
-    ) {
-        Column {
-            destinations.forEachIndexed { index, destination ->
-                if (index > 0) {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(start = 68.dp, end = 20.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant,
-                    )
+    Column(Modifier.fillMaxWidth()) {
+        destinations.forEachIndexed { index, destination ->
+            if (index > 0) HorizontalDivider(Modifier.padding(start = 52.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            Row(
+                Modifier.fillMaxWidth().clickable { onOpen(destination.key) }.padding(horizontal = 12.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(destination.icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(18.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(destination.title, style = MaterialTheme.typography.titleMedium)
+                    Text(destination.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Row(
-                    modifier = Modifier.fillMaxWidth().clickable { onOpen(destination.key) }
-                        .padding(horizontal = 20.dp, vertical = 20.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(destination.icon, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
-                    Spacer(Modifier.width(24.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(destination.title, style = MaterialTheme.typography.titleMedium)
-                        Text(destination.subtitle, style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 5.dp))
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Icon(Icons.Default.ChevronRight, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
-                }
+                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
             }
         }
     }
 }
 
 @Composable
-private fun SettingsGroup(
-    title: String? = null,
-    subtitle: String? = null,
-    content: @Composable () -> Unit,
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.06f)
-            .compositeOver(MaterialTheme.colorScheme.surface),
-    ) {
-        Column(modifier = Modifier.padding(vertical = 8.dp)) {
-            if (title != null) {
-                Text(title, color = MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp))
-            }
-            if (subtitle != null) {
-                Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 8.dp))
-            }
-            content()
-        }
+private fun SettingsGroup(title: String? = null, subtitle: String? = null, content: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        if (title != null) Text(title, style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp))
+        if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp))
+        content()
     }
 }
 
 @Composable
 private fun SettingsPageIntro(destination: SettingsDestination) {
-    Surface(
-        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-        shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.13f)
-            .compositeOver(MaterialTheme.colorScheme.surface),
-    ) {
-        Row(modifier = Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(destination.icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
-            Column(modifier = Modifier.padding(start = 20.dp)) {
-                Text(destination.title, style = MaterialTheme.typography.titleMedium)
-                Text(destination.subtitle, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-            }
-        }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Text(destination.title, style = MaterialTheme.typography.headlineMedium)
+        Text(destination.subtitle, style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
     }
 }
 
@@ -2780,13 +2697,14 @@ private fun ActionSettingRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.secondaryContainer,
+            shape = MaterialTheme.shapes.small,
+            color = MaterialTheme.colorScheme.surface,
         ) {
             Icon(
                 icon,
                 contentDescription = null,
-                modifier = Modifier.padding(9.dp).size(20.dp),
+                modifier = Modifier.padding(4.dp).size(22.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
@@ -2814,7 +2732,7 @@ private fun StatusAppearanceRow(
         modifier = Modifier.fillMaxWidth().padding(14.dp, 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Surface(color = color.copy(alpha = 0.16f), shape = CircleShape) {
+        Surface(color = statusSurface(color), shape = MaterialTheme.shapes.small) {
             Icon(
                 statusImageVector(iconOption),
                 contentDescription = null,
@@ -3058,7 +2976,7 @@ private fun attendanceSwipeVisual(swipeAction: GestureAction, swipeSettings: App
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
-private fun RollCallItem(
+internal fun RollCallItem(
     student: Student,
     mark: Mark?,
     iconOption: StatusIconOption?,
@@ -3076,9 +2994,6 @@ private fun RollCallItem(
 ) {
     val marked = mark != null
     val markColor = colorOption?.let { statusColor(it) }
-    // Pre-composite the tint so the swipe background cannot bleed through the card.
-    val surfaceColor = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 1f)
-    val container = markColor?.copy(alpha = 0.24f)?.compositeOver(surfaceColor) ?: surfaceColor
 
 
     SwipeRecordContainer(
@@ -3088,33 +3003,32 @@ private fun RollCallItem(
         onSwipeLeft = onSwipeLeft,
         onSwipeRight = onSwipeRight,
     ) { swipeModifier ->
-        Card(
+        AttendanceListRow(
             modifier = swipeModifier
                 .fillMaxWidth()
                 .combinedClickable(onClick = onTogglePresent, onLongClick = onLongPress),
-            colors = CardDefaults.cardColors(containerColor = container),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(
-                    horizontal = if (compact) 12.dp else 14.dp,
-                    vertical = if (compact) 5.dp else 10.dp,
+                    horizontal = LocalAttendanceLayout.current.rowInset,
+                    vertical = if (compact) 4.dp else LocalAttendanceLayout.current.rowPadding,
                 ),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
                     modifier = Modifier
                         .size(34.dp)
-                        .clip(CircleShape)
+                        .clip(MaterialTheme.shapes.small)
                         .background(
-                            if (marked) markColor ?: MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.surfaceVariant,
+                            if (marked) statusSurface(markColor ?: MaterialTheme.colorScheme.primary)
+                            else MaterialTheme.colorScheme.surfaceContainerLow,
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
                         imageVector = iconOption?.let(::statusImageVector) ?: Icons.Default.Person,
                         contentDescription = mark?.status?.label ?: "未点",
-                        tint = if (marked) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                        tint = markColor ?: MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(18.dp),
                     )
                 }
@@ -3143,9 +3057,8 @@ private fun StudentListItem(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card(
+    AttendanceListRow(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp, 8.dp, 8.dp, 8.dp),
@@ -3180,15 +3093,15 @@ private fun GlobalHistoryItem(
     val resolvedClassName = className.ifBlank { "已删除的班级" }
     val headline = if (titleMode == HistoryTitleMode.CLASS_NAME) resolvedClassName else formatTime(session.createdAt)
     val detailPrefix = if (titleMode == HistoryTitleMode.CLASS_NAME) formatTime(session.createdAt) else resolvedClassName
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    AttendanceListRow(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(headline, style = MaterialTheme.typography.titleMedium)
                 Text(
@@ -3197,7 +3110,7 @@ private fun GlobalHistoryItem(
                     } else {
                         "点名 · $detailPrefix"
                     },
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -3235,9 +3148,8 @@ private fun ResultEntryItem(
     settings: AppSettings,
     onEdit: () -> Unit,
 ) {
-    Card(
+    AttendanceListRow(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -3303,7 +3215,7 @@ private fun StatusBadge(
     colorOption: StatusColorOption,
 ) {
     val color = statusColor(colorOption)
-    Surface(color = color.copy(alpha = 0.16f), shape = RoundedCornerShape(50)) {
+    Surface(color = statusSurface(color), contentColor = color, shape = MaterialTheme.shapes.extraSmall) {
         Row(
             modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -3314,7 +3226,7 @@ private fun StatusBadge(
                 tint = color,
                 modifier = Modifier.size(15.dp),
             )
-            Text(status.label, modifier = Modifier.padding(start = 4.dp))
+            Text(status.label, style = AttendanceText.status, modifier = Modifier.padding(start = 4.dp))
         }
     }
 }
@@ -3328,7 +3240,7 @@ private fun SummaryCard(
     modifier: Modifier = Modifier,
 ) {
     val color = statusColor(colorOption)
-    Card(modifier = modifier) {
+    Column(modifier = modifier) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -3339,7 +3251,7 @@ private fun SummaryCard(
                 tint = color,
                 modifier = Modifier.size(18.dp),
             )
-            Text(count.toString(), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            Text(count.toString(), style = AttendanceText.statistic)
             Text(label, style = MaterialTheme.typography.labelMedium)
         }
     }
@@ -3394,6 +3306,7 @@ private fun StatusDialog(
                         label = { Text("原因或备注（可选）") },
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                         maxLines = 3,
+                        shape = MaterialTheme.shapes.small,
                     )
                 }
                 if (statusUsesReason(status) && presetReasons.isNotEmpty()) {
@@ -3440,6 +3353,7 @@ private fun AddStudentDialog(
                     label = { Text("姓名") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.small,
                 )
                 OutlinedTextField(
                     value = number,
@@ -3448,6 +3362,7 @@ private fun AddStudentDialog(
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                     modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.small,
                 )
             }
         },
@@ -3483,6 +3398,7 @@ private fun TextImportDialog(
                     minLines = 7,
                     maxLines = 12,
                     modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.small,
                 )
             }
         },
@@ -3513,6 +3429,7 @@ private fun TextInputDialog(
                 label = { Text(label) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.small,
             )
         },
         confirmButton = {
@@ -3569,10 +3486,10 @@ private fun SectionTitle(text: String) {
 private fun HintCard(text: String) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shape = MaterialTheme.shapes.small,
     ) {
-        Text(text, modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
+        Text(text, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -3595,16 +3512,7 @@ private fun statusImageVector(option: StatusIconOption): ImageVector = when (opt
 }
 
 @Composable
-private fun statusColor(option: StatusColorOption): Color = when (option) {
-    StatusColorOption.PRIMARY -> MaterialTheme.colorScheme.primary
-    StatusColorOption.GREEN -> Color(0xFF2E7D32)
-    StatusColorOption.AMBER -> Color(0xFFF57C00)
-    StatusColorOption.BLUE -> Color(0xFF1565C0)
-    StatusColorOption.RED -> Color(0xFFC62828)
-    StatusColorOption.PURPLE -> Color(0xFF6A1B9A)
-    StatusColorOption.TEAL -> Color(0xFF00796B)
-    StatusColorOption.GRAY -> Color(0xFF616161)
-}
+private fun statusColor(option: StatusColorOption): Color = statusTone(option)
 
 private fun statusUsesReason(status: AttendanceStatus): Boolean = status in setOf(
     AttendanceStatus.LATE,
@@ -3670,8 +3578,8 @@ private fun StorageRecoveryScreen(repository: AttendanceRepository, message: Str
             Text("数据需要恢复", style = MaterialTheme.typography.headlineSmall)
             Text(message)
             Text("已暂停修改。建议先导出原始数据；恢复备份会替换当前数据。")
-            Button(onClick = { export.launch("attendance-recovery.json") }, enabled = !busy) { Text("导出原始数据") }
-            Button(onClick = {
+            Button(shape = MaterialTheme.shapes.small, onClick = { export.launch("attendance-recovery.json") }, enabled = !busy) { Text("导出原始数据") }
+            Button(shape = MaterialTheme.shapes.small, onClick = {
                 scope.launch {
                     busy = true
                     val restored = withContext(Dispatchers.IO) { repository.recoverPrevious() }
@@ -3679,7 +3587,7 @@ private fun StorageRecoveryScreen(repository: AttendanceRepository, message: Str
                     result = if (restored) "已恢复" else "没有可用副本，请选择备份文件"
                 }
             }, enabled = !busy) { Text("恢复最近保存的数据") }
-            OutlinedButton(onClick = { restore.launch(arrayOf("application/json", "text/plain")) }, enabled = !busy) { Text("选择备份恢复") }
+            OutlinedButton(shape = MaterialTheme.shapes.small, onClick = { restore.launch(arrayOf("application/json", "text/plain")) }, enabled = !busy) { Text("选择备份恢复") }
             Text(if (busy) "正在恢复…" else result)
         }
     }

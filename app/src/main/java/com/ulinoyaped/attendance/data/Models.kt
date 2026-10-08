@@ -190,11 +190,11 @@ val resultCollapseOptions: Map<DisplayOption, AttendanceStatus> = linkedMapOf(
     DisplayOption.COLLAPSE_EXEMPT to AttendanceStatus.EXEMPT,
 )
 
-enum class ThemeSource { SYSTEM, CUSTOM }
+enum class ThemeSource { ATTENDANCE, SOFT, SYSTEM, CUSTOM }
 
 data class AppSettings(
-    val themeSource: ThemeSource = ThemeSource.SYSTEM,
-    val themeSeed: String = "#6750A4",
+    val themeSource: ThemeSource = ThemeSource.ATTENDANCE,
+    val themeSeed: String = "#315A74",
     val materialAvatarCompletesAll: Boolean = true,
     val showMaterialProgress: Boolean = true,
     val showMaterialOperationHint: Boolean = true,

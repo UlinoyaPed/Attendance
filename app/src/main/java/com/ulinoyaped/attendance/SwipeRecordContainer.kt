@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -25,7 +24,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -34,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
+import com.ulinoyaped.attendance.ui.theme.statusSurface
 import androidx.compose.runtime.mutableStateOf
 import kotlin.math.roundToInt
 import androidx.compose.runtime.rememberUpdatedState
@@ -71,16 +70,15 @@ internal fun SwipeRecordContainer(
     val swipeColor = visual.color
     val swipeIcon = visual.icon
     val swipeText = visual.label
-    val surfaceColor = MaterialTheme.colorScheme.surfaceContainerLow
     Box(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
+        modifier = Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small),
     ) {
         if (horizontalOffset != 0f) {
             Box(
                 modifier = Modifier
                     .matchParentSize()
                     // Fill behind the foreground's rounded corners before clipping labels.
-                    .background(swipeColor.copy(alpha = 0.2f).compositeOver(surfaceColor))
+                    .background(statusSurface(swipeColor))
                     .drawWithContent {
                         // Reveal only the strip vacated by the foreground card, including
                         // during the return animation. Never draw labels beneath its content.
@@ -98,7 +96,7 @@ internal fun SwipeRecordContainer(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (horizontalOffset > 0f) Icon(swipeIcon, null, tint = swipeColor, modifier = Modifier.size(20.dp))
-                    Text(swipeText, color = MaterialTheme.colorScheme.onSurface)
+                    Text(swipeText, color = swipeColor, style = MaterialTheme.typography.labelLarge)
                     if (horizontalOffset < 0f) Icon(swipeIcon, null, tint = swipeColor, modifier = Modifier.size(20.dp))
                 }
             }

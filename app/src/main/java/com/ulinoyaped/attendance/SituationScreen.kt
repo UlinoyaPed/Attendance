@@ -20,8 +20,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -82,19 +80,17 @@ internal fun SituationScreen(
             ) {
                 item { Text("将长期请假、不参与或固定迟到原因按学生预先保存；使用时只覆写这里列出的学生。", style = MaterialTheme.typography.bodyMedium) }
                 items(group.situations, key = { it.id }) { situation ->
-                    Card(
+                    AttendanceListRow(
                         modifier = Modifier.fillMaxWidth().clickable { selected = situation },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(22.dp),
                     ) { Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(situation.name, style = MaterialTheme.typography.titleMedium)
-                            Text("${situation.assignments.size} 名学生", style = MaterialTheme.typography.bodySmall)
+                            Text("${situation.assignments.size} 名学生", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         IconButton(onClick = { onDelete(situation.id) }) { Icon(Icons.Default.Delete, "删除") }
                     } }
                 }
-                item { Button(onClick = { addingName = true }, Modifier.fillMaxWidth()) {
+                item { Button(shape = MaterialTheme.shapes.small, onClick = { addingName = true }, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("添加情况")
                 } }
             }
@@ -136,19 +132,17 @@ private fun SituationAssignments(
         item { Text("逐个添加和覆写。一个学生在同一情况中只有一条规则。", style = MaterialTheme.typography.bodyMedium) }
         items(situation.assignments, key = { it.studentId }) { assignment ->
             val student = studentById[assignment.studentId] ?: return@items
-            Card(
+            AttendanceListRow(
                 Modifier.fillMaxWidth().clickable { adding = false; editing = student },
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(22.dp),
             ) { Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(student.name, style = MaterialTheme.typography.titleMedium)
-                    Text(listOf(assignment.status.label, assignment.reason).filter { it.isNotBlank() }.joinToString(" · "))
+                    Text(listOf(assignment.status.label, assignment.reason).filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 IconButton(onClick = { onRemove(student.id) }) { Icon(Icons.Default.Delete, "移除") }
             } }
         }
-        item { Button(onClick = { adding = true; editing = group.students.firstOrNull() }, enabled = group.students.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+        item { Button(shape = MaterialTheme.shapes.small, onClick = { adding = true; editing = group.students.firstOrNull() }, enabled = group.students.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("添加或覆写学生")
         } }
     }
@@ -186,7 +180,7 @@ private fun AssignmentDialog(
                     RadioButton(status == option, onClick = { status = option }); Text(option.label)
                 }
             }
-            item { OutlinedTextField(reason, { reason = it.take(240).filterNot(::unsafeTextCharacter) }, label = { Text("原因（可选）") }, singleLine = true) }
+            item { OutlinedTextField(reason, { reason = it.take(240).filterNot(::unsafeTextCharacter) }, label = { Text("原因（可选）") }, singleLine = true, shape = MaterialTheme.shapes.small) }
         }
     }, confirmButton = { TextButton(onClick = { onConfirm(student, status, reason) }) { Text("保存") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
@@ -196,7 +190,7 @@ private fun AssignmentDialog(
 private fun SituationNameDialog(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     var value by remember(initial) { mutableStateOf(initial) }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(if (initial.isEmpty()) "添加情况" else "修改名称") },
-        text = { OutlinedTextField(value, { value = it.take(120).filterNot(::unsafeTextCharacter) }, label = { Text("名称") }, singleLine = true) },
+        text = { OutlinedTextField(value, { value = it.take(120).filterNot(::unsafeTextCharacter) }, label = { Text("名称") }, singleLine = true, shape = MaterialTheme.shapes.small) },
         confirmButton = { TextButton(onClick = { onConfirm(value.trim()) }, enabled = value.isNotBlank()) { Text("保存") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
 }

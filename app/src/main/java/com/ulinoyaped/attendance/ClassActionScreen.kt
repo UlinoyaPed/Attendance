@@ -1,5 +1,7 @@
 package com.ulinoyaped.attendance
 
+import com.ulinoyaped.attendance.ui.theme.LocalAttendanceLayout
+import com.ulinoyaped.attendance.ui.theme.statusSurface
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Groups
@@ -23,8 +24,6 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,7 +39,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -74,7 +72,7 @@ internal fun ClassActionScreen(
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 28.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(LocalAttendanceLayout.current.groupGap),
         ) {
             item {
                 Text(group?.name ?: "尚未选择班级", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
@@ -103,7 +101,7 @@ internal fun ClassActionScreen(
                     title = "材料登记",
                     subtitle = "自定义本次名称和一份或多份材料",
                     icon = Icons.Default.Inventory2,
-                    iconColor = MaterialTheme.colorScheme.tertiary,
+                    iconColor = MaterialTheme.colorScheme.primary,
                     onClick = { showMaterialDialog = true },
                 )
             }
@@ -113,7 +111,7 @@ internal fun ClassActionScreen(
                     title = "管理班级",
                     subtitle = "编辑班名、学生名单、情况和班级设置",
                     icon = Icons.Default.Settings,
-                    iconColor = MaterialTheme.colorScheme.secondary,
+                    iconColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     onClick = onManageClass,
                 )
             }
@@ -138,22 +136,20 @@ private fun ClassActionItem(
     iconColor: Color,
     onClick: () -> Unit,
 ) {
-    Card(
+    AttendancePanel(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = iconColor.copy(alpha = 0.12f).compositeOver(MaterialTheme.colorScheme.surfaceContainerLow)),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Surface(
-                modifier = Modifier.size(50.dp),
-                shape = RoundedCornerShape(15.dp),
-                color = iconColor,
+                modifier = Modifier.size(36.dp),
+                shape = MaterialTheme.shapes.small,
+                color = statusSurface(iconColor),
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.surface, modifier = Modifier.size(25.dp))
+                    Icon(icon, contentDescription = null, tint = iconColor, modifier = Modifier.size(22.dp))
                 }
             }
             Spacer(Modifier.width(14.dp))
@@ -168,12 +164,12 @@ private fun ClassActionItem(
 @Composable
 internal fun ProfileAvatarButton(icon: ProfileIconOption, onClick: () -> Unit) {
     IconButton(onClick = onClick) {
-        Surface(modifier = Modifier.size(36.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+        Surface(modifier = Modifier.size(36.dp), shape = CircleShape, color = statusSurface(MaterialTheme.colorScheme.primary)) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     profileImageVector(icon),
                     contentDescription = "切换班级",
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(21.dp),
                 )
             }

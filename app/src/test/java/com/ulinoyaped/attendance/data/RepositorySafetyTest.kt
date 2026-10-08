@@ -85,6 +85,31 @@ class RepositorySafetyTest {
         assertEquals("#386A54", restored.settings.value.themeSeed)
     }
 
+    @Test fun themePresetsPersistAndLegacyThemesRemainExplicit() {
+        val store = Store()
+        val repository = AttendanceRepository(store.preferences)
+        assertEquals(ThemeSource.ATTENDANCE, repository.settings.value.themeSource)
+        for (source in ThemeSource.entries) {
+            repository.setTheme(source, "#315A74")
+            assertTrue(repository.awaitSaved())
+            val restored = AttendanceRepository(store.preferences)
+            assertEquals(source, restored.settings.value.themeSource)
+            assertTrue(restored.importBackup(repository.exportBackup()))
+            assertEquals(source, restored.settings.value.themeSource)
+        }
+        // Older settings did not contain presets; explicit SYSTEM and CUSTOM are preserved.
+        for (source in listOf(ThemeSource.SYSTEM, ThemeSource.CUSTOM)) {
+            val legacy = JSONObject(repository.exportBackup())
+            legacy.getJSONObject("settings").put("themeSource", source.name)
+            assertTrue(repository.importBackup(legacy.toString()))
+            assertEquals(source, repository.settings.value.themeSource)
+        }
+        val missing = JSONObject(repository.exportBackup())
+        missing.getJSONObject("settings").remove("themeSource")
+        assertTrue(repository.importBackup(missing.toString()))
+        assertEquals(ThemeSource.ATTENDANCE, repository.settings.value.themeSource)
+    }
+
     @Test fun classOverrideBackupRoundTripsAndRejectsUnknownKeys() {
         val store = Store()
         val repository = AttendanceRepository(store.preferences)

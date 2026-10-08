@@ -1,5 +1,7 @@
 package com.ulinoyaped.attendance
 
+import androidx.compose.foundation.BorderStroke
+
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
@@ -120,9 +122,11 @@ internal fun LazyListScope.reasonReorderItems(
                 .animateItem(placementSpec = if (active) null else spring())
                 .zIndex(if (active) 1f else 0f)
                 .graphicsLayer { translationY = if (active) state.translation else 0f },
-            elevation = CardDefaults.cardElevation(defaultElevation = if (active) 8.dp else 0.dp),
-            colors = CardDefaults.cardColors(containerColor = if (active) MaterialTheme.colorScheme.secondaryContainer
-                else MaterialTheme.colorScheme.surfaceContainerLow),
+            shape = MaterialTheme.shapes.small,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            elevation = CardDefaults.cardElevation(defaultElevation = if (active) 2.dp else 0.dp),
+            colors = CardDefaults.cardColors(containerColor = if (active) MaterialTheme.colorScheme.surfaceContainerLow
+                else MaterialTheme.colorScheme.surface),
         ) {
             Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(

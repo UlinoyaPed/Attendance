@@ -40,6 +40,7 @@ private val settingFields = mapOf(
     "显示材料状态按钮" to "showMaterialStatusButton",
 )
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 internal fun SettingInheritance(title: String, field: String? = null) {
     val scope = LocalClassSettingsScope.current ?: return
@@ -47,13 +48,15 @@ internal fun SettingInheritance(title: String, field: String? = null) {
         val status = AttendanceStatus.entries.firstOrNull { title == "默认折叠${it.label}列表" } ?: return
         "collapse.${status.name}"
     } else return
-    if (key in scope.fields) {
-        Text((if (field != null) "$title · " else "") + "本班覆写 · 恢复全局", style = MaterialTheme.typography.labelSmall,
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        val prefix = if (field != null) "$title · " else ""
+        Text(prefix + if (key in scope.fields) "本班覆写" else "跟随全局",
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.align(androidx.compose.ui.Alignment.CenterVertically),
+            color = if (key in scope.fields) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        if (key in scope.fields) Text("恢复全局", style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.clickable { scope.onReset(key) }.padding(vertical = 8.dp))
-    } else {
-        Text((if (field != null) "$title · " else "") + "跟随全局", style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+            modifier = Modifier.align(androidx.compose.ui.Alignment.CenterVertically).clickable(onClickLabel = "恢复$title 为全局设置", role = androidx.compose.ui.semantics.Role.Button) { scope.onReset(key) }.padding(vertical = 6.dp, horizontal = 4.dp))
     }
 }
 
