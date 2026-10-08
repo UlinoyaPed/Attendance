@@ -78,6 +78,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -85,6 +86,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -133,6 +136,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -1224,13 +1228,24 @@ private fun RollCallScreen(
     var selecting by remember(group.id, draftKey) { mutableStateOf(false) }
     var selectedIds by remember(group.id, draftKey) { mutableStateOf(emptySet<String>()) }
     var showBatchMenu by remember { mutableStateOf(false) }
+    var showSelectionMenu by remember { mutableStateOf(false) }
     var showBatchDialog by remember { mutableStateOf(false) }
     val checked = group.students.count { marks[it.id]?.status != null }
     val exceptionCount = marks.values.count { it.status.isException() }
     val visibleStudents = filterRollCallStudents(group.students, marks, query, filter)
+    val visibleStudentIds = visibleStudents.mapTo(mutableSetOf()) { it.id }
+    val hiddenSelectedCount = selectedIds.count { it !in visibleStudentIds }
+    val focus = LocalFocusManager.current
     val listState = rememberLazyListState()
     LaunchedEffect(query, filter) { listState.scrollToItem(0) }
-    BackHandler(enabled = selecting) { selecting = false; selectedIds = emptySet() }
+    BackHandler(enabled = selecting) { selecting = false; selectedIds = emptySet(); showSelectionMenu = false }
+
+    fun reviewExceptions() {
+        focus.clearFocus()
+        query = ""
+        filter = RollCallFilter.EXCEPTIONS
+        showFinishDialog = false
+    }
 
     fun persistMarks() {
         onDraftChange(
@@ -1265,14 +1280,15 @@ private fun RollCallScreen(
     fun updateMark(student: Student, mark: Mark?) {
         val after = marks.toMutableMap()
         if (mark == null) after.remove(student.id) else after[student.id] = mark
-        commitMarks(after, if (mark == null) "已清除${student.name}的标记" else "已将${student.name}标记为${mark.status.label}")
+        val label = mark?.status?.let { if (it == AttendanceStatus.PRESENT) "到场" else it.label } ?: "清除"
+        commitMarks(after, "${student.name} → $label")
     }
 
     fun fillUnmarked(status: AttendanceStatus) {
         val ids = group.students.mapTo(mutableSetOf()) { it.id }
         val after = batchAttendanceMarks(marks, ids, Mark(status, effectiveSettings.defaultReason))
         val changed = ids.count { after[it] != marks[it] }
-        commitMarks(after, "已将 $changed 名未处理学生标记为${status.label}")
+        commitMarks(after, "$changed 名全班未处理学生 → ${if (status == AttendanceStatus.PRESENT) "到场" else status.label}")
         showBatchMenu = false
     }
 
@@ -1322,17 +1338,63 @@ private fun RollCallScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text("${group.name} · 点名", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (selecting) Column {
+                        Text("已选 ${selectedIds.size} 人", style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (hiddenSelectedCount > 0) Text(
+                            "$hiddenSelectedCount 人当前未显示",
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                    } else Text("${group.name} · 点名", maxLines = 1, overflow = TextOverflow.Ellipsis)
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    IconButton(onClick = {
+                        if (selecting) { selecting = false; selectedIds = emptySet(); showSelectionMenu = false }
+                        else onBack()
+                    }) {
+                        Icon(
+                            if (selecting) Icons.Default.Close else Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = if (selecting) "退出选择" else "返回",
+                        )
                     }
                 },
                 actions = {
-                    TextButton(onClick = { showBatchMenu = true }, enabled = !finishing) { Text("批量") }
-                    if (group.situations.isNotEmpty()) IconButton(onClick = { showSituations = true }) {
-                        Icon(Icons.Default.EventBusy, contentDescription = "应用班级情况")
+                    if (selecting) {
+                        TextButton(onClick = { showBatchDialog = true }, enabled = selectedIds.isNotEmpty() && !finishing) { Text("处理") }
+                        Box {
+                            IconButton(onClick = { showSelectionMenu = true }) { Icon(Icons.Default.MoreVert, "选择操作") }
+                            DropdownMenu(expanded = showSelectionMenu, onDismissRequest = { showSelectionMenu = false }) {
+                                DropdownMenuItem(text = { Text("选择当前结果") }, enabled = visibleStudents.isNotEmpty(), onClick = {
+                                    selectedIds = selectedIds + visibleStudentIds
+                                    showSelectionMenu = false
+                                })
+                                DropdownMenuItem(text = { Text("清除选择") }, enabled = selectedIds.isNotEmpty(), onClick = {
+                                    selectedIds = emptySet()
+                                    showSelectionMenu = false
+                                })
+                            }
+                        }
+                    } else {
+                        Box {
+                            TextButton(onClick = { focus.clearFocus(); showBatchMenu = true }, enabled = !finishing) { Text("批量") }
+                            DropdownMenu(expanded = showBatchMenu, onDismissRequest = { showBatchMenu = false }) {
+                                DropdownMenuItem(text = { Text("全班未处理 → 到场") }, enabled = checked < group.students.size,
+                                    onClick = { fillUnmarked(AttendanceStatus.PRESENT) })
+                                DropdownMenuItem(text = { Text("全班未处理 → 缺勤") }, enabled = checked < group.students.size,
+                                    onClick = { fillUnmarked(AttendanceStatus.ABSENT) })
+                                DropdownMenuItem(text = { Text("选择学生…") }, onClick = { selecting = true; showBatchMenu = false })
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text("清空本次标记…", color = MaterialTheme.colorScheme.error) },
+                                    enabled = marks.isNotEmpty(),
+                                    onClick = { showBatchMenu = false; showClearDraftDialog = true },
+                                )
+                            }
+                        }
+                        if (group.situations.isNotEmpty()) IconButton(onClick = { showSituations = true }, enabled = !finishing) {
+                            Icon(Icons.Default.EventBusy, contentDescription = "应用班级情况")
+                        }
                     }
                 },
             )
@@ -1340,43 +1402,26 @@ private fun RollCallScreen(
         snackbarHost = { SnackbarHost(undo.host) },
         bottomBar = {
             Surface(shadowElevation = 8.dp) {
-                Column {
-                    TextButton(onClick = { query = ""; filter = RollCallFilter.EXCEPTIONS }, modifier = Modifier.fillMaxWidth()) {
-                        Text("复核异常 $exceptionCount 人")
-                    }
-                    Button(
-                        onClick = {
-                            if (
-                                checked < group.students.size &&
-                                effectiveSettings.confirmIncompleteAttendance
-                            ) {
-                                showFinishDialog = true
-                            } else {
-                                finish()
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth().padding(16.dp).height(50.dp),
-                        enabled = !finishing,
-                    ) { Text(if (finishing) "正在保存…" else "结束并查看结果") }
-                }
+                Button(
+                    onClick = {
+                        if (
+                            checked < group.students.size &&
+                            effectiveSettings.confirmIncompleteAttendance
+                        ) {
+                            showFinishDialog = true
+                        } else {
+                            finish()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(16.dp).height(50.dp),
+                    enabled = !finishing,
+                ) { Text(if (finishing) "正在保存…" else "结束并查看结果") }
             }
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             Column(Modifier.padding(horizontal = 16.dp)) {
                 RollCallSearchTools(query, { query = it }, filter, { filter = it })
-                if (selecting) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("已选 ${selectedIds.size} 人", modifier = Modifier.weight(1f))
-                        TextButton(onClick = { showBatchDialog = true }, enabled = selectedIds.isNotEmpty()) { Text("处理") }
-                        TextButton(onClick = { selecting = false; selectedIds = emptySet() }) { Text("退出") }
-                    }
-                    Row {
-                        TextButton(onClick = { selectedIds = selectedIds + visibleStudents.map { it.id } }) { Text("选择当前结果") }
-                        TextButton(onClick = { selectedIds = emptySet() }, enabled = selectedIds.isNotEmpty()) { Text("清除选择") }
-                    }
-                    Text("筛选后仍保留已选学生；处理范围为全部已选学生。", style = MaterialTheme.typography.bodySmall)
-                }
             }
             LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -1384,13 +1429,17 @@ private fun RollCallScreen(
                 contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 24.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (effectiveSettings.showRollCallProgress || effectiveSettings.showOperationHint) {
+                if (effectiveSettings.showRollCallProgress || effectiveSettings.showOperationHint || exceptionCount > 0) {
                     item {
                         Column(modifier = Modifier.padding(bottom = 6.dp)) {
-                            if (effectiveSettings.showRollCallProgress) {
-                                Text(
-                                    "$checked / ${group.students.size} 已处理",
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (effectiveSettings.showRollCallProgress) Text(
+                                    "$checked / ${group.students.size} 已处理", modifier = Modifier.weight(1f),
                                     style = MaterialTheme.typography.titleMedium,
+                                )
+                                if (exceptionCount > 0) AssistChip(
+                                    onClick = { reviewExceptions() },
+                                    label = { Text("异常 $exceptionCount") },
                                 )
                             }
                             if (effectiveSettings.showOperationHint) {
@@ -1464,20 +1513,9 @@ private fun RollCallScreen(
         }
     }
 
-    if (showBatchMenu) AlertDialog(
-        onDismissRequest = { showBatchMenu = false },
-        title = { Text("批量处理") },
-        text = { Column {
-            Text("以下两项处理全班所有未处理学生，不受当前搜索或筛选影响，已有状态和原因保持不变。")
-            TextButton(onClick = { fillUnmarked(AttendanceStatus.PRESENT) }, enabled = checked < group.students.size) { Text("所有未处理 → 到场") }
-            TextButton(onClick = { fillUnmarked(AttendanceStatus.ABSENT) }, enabled = checked < group.students.size) { Text("所有未处理 → 缺勤") }
-            TextButton(onClick = { selecting = true; showBatchMenu = false }) { Text("选择学生，统一设置状态或原因") }
-            TextButton(onClick = { showBatchMenu = false; showClearDraftDialog = true }, enabled = marks.isNotEmpty()) { Text("清空本次标记…") }
-        } },
-        confirmButton = { TextButton(onClick = { showBatchMenu = false }) { Text("关闭") } },
-    )
     if (showBatchDialog) AttendanceBatchDialog(
         count = selectedIds.size,
+        hiddenCount = hiddenSelectedCount,
         markedCount = selectedIds.count { marks[it] != null },
         exceptionCount = selectedIds.count { marks[it]?.status?.isException() == true },
         presetReasons = effectiveSettings.absenceReasons,
@@ -1551,7 +1589,10 @@ private fun RollCallScreen(
         AlertDialog(
             onDismissRequest = { showFinishDialog = false },
             title = { Text("还有 $remaining 人未点") },
-            text = { Text("继续结束后，未标记的学生将自动记为缺勤。") },
+            text = { Column {
+                Text("继续结束后，未标记的学生将自动记为缺勤。")
+                if (exceptionCount > 0) TextButton(onClick = { reviewExceptions() }) { Text("先复核异常 $exceptionCount 人") }
+            } },
             confirmButton = {
                 TextButton(onClick = { showFinishDialog = false; finish() }) { Text("记为缺勤并结束") }
             },
@@ -1781,7 +1822,7 @@ private fun ResultScreen(
             onConfirm = { mark ->
                 if (entry.status != mark.status || entry.reason != mark.reason) {
                     onUpdateEntry(entry.studentId, mark.status, mark.reason)
-                    undo.offer("已将${entry.studentName}标记为${mark.status.label}") {
+                    undo.offer("${entry.studentName} → ${if (mark.status == AttendanceStatus.PRESENT) "到场" else mark.status.label}") {
                         onUpdateEntry(entry.studentId, entry.status, entry.reason)
                     }
                 }

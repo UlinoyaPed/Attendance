@@ -28,7 +28,7 @@ internal class RecentOperationUndo(private val scope: CoroutineScope) {
         clear()
         val current = generation
         job = scope.launch {
-            val result = host.showSnackbar(message, actionLabel = "撤销", withDismissAction = true, duration = SnackbarDuration.Short)
+            val result = host.showSnackbar(message, actionLabel = "撤销", duration = SnackbarDuration.Short)
             if (result == SnackbarResult.ActionPerformed && current == generation) restore()
         }
     }

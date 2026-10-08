@@ -2,6 +2,7 @@ package com.ulinoyaped.attendance
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,7 +16,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -26,6 +30,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
@@ -42,6 +48,7 @@ internal fun RollCallSearchTools(
     filter: RollCallFilter, onFilterChange: (RollCallFilter) -> Unit,
 ) {
     val focus = LocalFocusManager.current
+    var showStatusMenu by remember { mutableStateOf(false) }
     Column {
         OutlinedTextField(
             value = query, onValueChange = { onQueryChange(it.take(120)) },
@@ -50,9 +57,27 @@ internal fun RollCallSearchTools(
             keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
             trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { onQueryChange("") }) { Text("清除") } },
         )
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(RollCallFilter.entries) { option ->
-                FilterChip(selected = filter == option, onClick = { focus.clearFocus(); onFilterChange(option) }, label = { Text(option.label) })
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            LazyRow(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(listOf(RollCallFilter.ALL, RollCallFilter.UNMARKED, RollCallFilter.EXCEPTIONS, RollCallFilter.MARKED)) { option ->
+                    FilterChip(selected = filter == option, onClick = { focus.clearFocus(); onFilterChange(option) }, label = { Text(option.label) })
+                }
+            }
+            Box {
+                FilterChip(
+                    selected = filter.status != null,
+                    onClick = { focus.clearFocus(); showStatusMenu = true },
+                    label = { Text(if (filter.status != null) filter.label else "状态") },
+                    trailingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = "选择异常状态") },
+                )
+                DropdownMenu(expanded = showStatusMenu, onDismissRequest = { showStatusMenu = false }) {
+                    RollCallFilter.entries.filter { it.status != null }.forEach { option ->
+                        DropdownMenuItem(text = { Text(option.label) }, onClick = {
+                            showStatusMenu = false
+                            onFilterChange(option)
+                        })
+                    }
+                }
             }
         }
     }
@@ -61,6 +86,7 @@ internal fun RollCallSearchTools(
 @Composable
 internal fun AttendanceBatchDialog(
     count: Int,
+    hiddenCount: Int,
     markedCount: Int,
     exceptionCount: Int,
     presetReasons: List<String>,
@@ -76,6 +102,11 @@ internal fun AttendanceBatchDialog(
         onDismissRequest = onDismiss,
         title = { Text("批量处理 $count 名学生") },
         text = { Column(Modifier.verticalScroll(rememberScrollState())) {
+            if (hiddenCount > 0) Text(
+                "将处理全部 $count 名已选学生，其中 $hiddenCount 人当前未显示。",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable { reasonsOnly = !reasonsOnly }) {
                 Checkbox(checked = reasonsOnly, onCheckedChange = { reasonsOnly = it })
                 Text("仅修改原因，保持状态")

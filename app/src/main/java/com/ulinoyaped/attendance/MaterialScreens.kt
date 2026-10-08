@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -87,14 +88,19 @@ internal fun MaterialTaskScreen(
     fun setStatus(studentId: String, materialId: String, status: MaterialRecordStatus) {
         val student = task.participants.first { it.id == studentId }
         val material = task.materials.first { it.id == materialId }
-        changeRecords("${student.name} · ${material.name}已标记为${materialStatusLabel(status)}") {
+        changeRecords("${student.name} · ${material.name} → ${materialStatusLabel(status)}") {
             onSetStatus(studentId, materialId, status)
         }
     }
 
     fun completeStudent(studentId: String, overwriteRejected: Boolean = false) {
         val student = task.participants.first { it.id == studentId }
-        changeRecords(if (overwriteRejected) "已确认${student.name}的全部材料" else "已确认${student.name}的未登记材料") {
+        val records = onReadRecords().filter { it.studentId == studentId }
+        val pending = task.materials.size - records.count { it.status != MaterialRecordStatus.PENDING }
+        val rejected = records.count { it.status == MaterialRecordStatus.REJECTED }
+        val message = if (overwriteRejected) "${student.name}：$pending 份未登记、$rejected 份不合格 → 已完成"
+            else "${student.name}：$pending 份未登记 → 已完成"
+        changeRecords(message) {
             onCompleteStudent(studentId, overwriteRejected)
         }
     }
@@ -158,7 +164,7 @@ internal fun MaterialTaskScreen(
                                             complete -> Icons.Default.CheckCircle
                                             else -> Icons.Default.Person
                                         },
-                                        contentDescription = "确认${student.name}的全部材料",
+                                        contentDescription = "确认${student.name}的未登记材料",
                                         tint = if (rejectedForStudent > 0) MaterialTheme.colorScheme.onError
                                             else if (complete) MaterialTheme.colorScheme.onPrimary
                                             else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -243,16 +249,24 @@ internal fun MaterialTaskScreen(
     }
     confirmingStudent?.let { studentId ->
         val student = task.participants.first { it.id == studentId }
-        val rejected = onReadRecords().count { it.studentId == studentId && it.status == MaterialRecordStatus.REJECTED }
+        val records = onReadRecords().filter { it.studentId == studentId }
+        val rejected = records.count { it.status == MaterialRecordStatus.REJECTED }
+        val pending = task.materials.size - records.count { it.status != MaterialRecordStatus.PENDING }
         AlertDialog(
             onDismissRequest = { confirmingStudent = null },
             title = { Text("${student.name}有 $rejected 份不合格材料") },
-            text = { Column {
-                Text("默认保留不合格结果，只确认未登记材料。")
-                TextButton(onClick = { completeStudent(studentId, true); confirmingStudent = null }) { Text("覆盖不合格，确认全部材料") }
+            text = { Text("还有 $pending 份未登记。默认保留不合格结果，只确认未登记材料。") },
+            confirmButton = { Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+                Button(
+                    onClick = { completeStudent(studentId); confirmingStudent = null },
+                    enabled = pending > 0, modifier = Modifier.fillMaxWidth(),
+                ) { Text("只确认 $pending 份未登记") }
+                TextButton(
+                    onClick = { completeStudent(studentId, true); confirmingStudent = null },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("覆盖 $rejected 份不合格并全部确认") }
+                TextButton(onClick = { confirmingStudent = null }) { Text("取消") }
             } },
-            confirmButton = { TextButton(onClick = { completeStudent(studentId); confirmingStudent = null }) { Text("只确认未登记") } },
-            dismissButton = { TextButton(onClick = { confirmingStudent = null }) { Text("取消") } },
         )
     }
 }
