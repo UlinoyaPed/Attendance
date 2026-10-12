@@ -168,12 +168,13 @@ internal fun MaterialTaskScreen(
                             Spacer(Modifier.width(12.dp))
                             StudentIdentityText(
                                 student = student,
-                                detail = listOfNotNull(
-                                    student.studentNumber.takeIf { settings.showStudentNumbers && it.isNotBlank() },
+                                detail = student.studentNumber.takeIf { settings.showStudentNumbers }.orEmpty(),
+                                statusText = listOfNotNull(
                                     "已完成 $completedForStudent/${task.materials.size}".takeIf { settings.showMaterialProgress },
                                     "不合格 $rejectedForStudent".takeIf { settings.showMaterialProgress && rejectedForStudent > 0 },
                                 ).joinToString(" · "),
                                 modifier = Modifier.weight(1f),
+                                detailMaxLines = if (settings.compactMaterialRows) 1 else 2,
                             )
                         }
                         task.materials.forEachIndexed { index, material ->

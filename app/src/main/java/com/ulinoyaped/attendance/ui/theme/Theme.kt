@@ -88,6 +88,16 @@ internal fun defaultColorScheme(dark: Boolean): ColorScheme = attendanceSurfaces
     ), dark,
 )
 
+/** Shared by runtime, previews, and tests; dynamic roles are supplied only on API 31+. */
+internal fun attendanceColorScheme(source: ThemeSource, seed: String, dark: Boolean, dynamic: ColorScheme? = null): ColorScheme {
+    val accent = when (source) {
+        ThemeSource.ATTENDANCE, ThemeSource.SOFT -> defaultColorScheme(dark)
+        ThemeSource.SYSTEM -> dynamic ?: defaultColorScheme(dark)
+        ThemeSource.CUSTOM -> customColorScheme((0xFF000000L or seed.removePrefix("#").toLong(16)).toInt(), dark)
+    }
+    return attendanceSurfaces(accent, dark, source == ThemeSource.SOFT)
+}
+
 @Composable
 fun AttendanceTheme(content: @Composable () -> Unit) {
     val context = LocalContext.current
@@ -96,14 +106,10 @@ fun AttendanceTheme(content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
     val soft = settings.themeSource == ThemeSource.SOFT
     val colors = remember(settings.themeSource, settings.themeSeed, dark, context.resources.configuration) {
-        val accents = when (settings.themeSource) {
-            ThemeSource.SYSTEM -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-            } else defaultColorScheme(dark)
-            ThemeSource.CUSTOM -> customColorScheme(android.graphics.Color.parseColor(settings.themeSeed), dark)
-            ThemeSource.ATTENDANCE, ThemeSource.SOFT -> defaultColorScheme(dark)
-        }
-        attendanceSurfaces(accents, dark, soft)
+        val dynamic = if (settings.themeSource == ThemeSource.SYSTEM && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        } else null
+        attendanceColorScheme(settings.themeSource, settings.themeSeed, dark, dynamic)
     }
     CompositionLocalProvider(LocalAttendanceLayout provides AttendanceLayout(dark, soft)) {
         MaterialTheme(colorScheme = colors, shapes = attendanceShapes(soft), typography = AttendanceTypography, content = content)

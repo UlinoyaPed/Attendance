@@ -29,7 +29,7 @@
 - **系统动态**：Android 12+ 使用壁纸生成的强调色；更旧系统回退到 Attendance。形状、排版、状态和中性表面规则不变。
 - **自定义**：一个 `#RRGGBB` 主色及少量快捷色。生成成对的前景/背景强调色，不新增背景、字体或组件圆角设置。
 
-复用现有 `themeSource`（新增 `ATTENDANCE`、`SOFT` 枚举值）和 `themeSeed`。新安装和缺少主题字段的数据默认 Attendance；明确存储的 `SYSTEM`、`CUSTOM` 原样保留。主题仍仅属于全局，不参与班级覆写。旧数据与备份可由新版读取；包含新预设枚举的备份需要新版恢复，旧版不认识这些枚举值。未修改班级、学生、历史快照、草稿或材料数据结构。
+复用现有 `themeSource`（新增 `ATTENDANCE`、`SOFT` 枚举值）和 `themeSeed`。新安装和缺少主题字段的数据默认 Attendance；明确存储的 `SYSTEM`、`CUSTOM` 原样保留。主题仍仅属于全局，不参与班级覆写。旧数据与备份可由新版读取。新预设用可选 `themePreset` 保存，`themeSource` 保留旧版认识的 CUSTOM 主色回退；旧版可恢复业务数据并降级视觉，新版保留完整预设。3c77235 的直接枚举备份也兼容读取，详见 [针对性审查](visual-review.md)。未修改班级、学生、历史快照、草稿或材料数据结构。
 
 ## 形状与文字
 
@@ -43,7 +43,7 @@
 
 `AttendanceTypography` 显式定义全部 Material 文本层级，使用系统 SansSerif。页面标题 24–28sp，模块和学生姓名 16sp Medium，正文 14–16sp，学号、原因与辅助信息 12sp，状态标签 12sp Medium，统计数字 22sp Medium 且使用等宽数字特性。通过前景色降低次要信息权重，避免全页粗体。
 
-`AttendanceLayout` 提供页面 / 行内边距、列表间隔和分组间隔。新共用组件只保留真实重复规则：`AttendancePanel`（有意义的中性边框分组）、`AttendanceListRow`（平坦行与分隔，必要时选中边框）、`StudentIdentityText`（姓名优先、细节次要）。不把每个业务控件包装成独立框架。
+`AttendanceLayout` 提供页面 / 行内边距、列表间隔和分组间隔。新共用组件只保留真实重复规则：`AttendancePanel`（有意义的中性边框分组）、`AttendanceListRow`（平坦行与分隔，必要时选中边框）、`StudentIdentityText`（姓名优先、状态独立、细节次要）。不把每个业务控件包装成独立框架。
 
 ## 页面与行为
 

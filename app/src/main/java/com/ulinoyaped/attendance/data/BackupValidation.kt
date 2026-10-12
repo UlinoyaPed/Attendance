@@ -49,7 +49,7 @@ fun validateBackup(root: JSONObject) {
             }
             val choices = when {
                 key in listOf("longPressAction", "swipeLeftAction", "swipeRightAction") -> GestureAction.entries.map { it.name }
-                key == "themeSource" -> ThemeSource.entries.map { it.name }
+                key == "themeSource" || key == "themePreset" -> ThemeSource.entries.map { it.name }
                 key == "profileIcon" -> ProfileIconOption.entries.map { it.name }
                 key.endsWith("Icon") -> StatusIconOption.entries.map { it.name }
                 key.endsWith("Color") -> StatusColorOption.entries.map { it.name }

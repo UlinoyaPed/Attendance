@@ -1,34 +1,88 @@
-name: Build unsigned APK
+name: Build and publish nightly
 
 on:
+  push:
+    branches: [master]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Publishing a moving tag must not overlap or be cancelled halfway through asset upload.
+concurrency:
+  group: attendance-nightly
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
       - name: Set up JDK 17
         uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: "17"
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
-
-      - name: Build unsigned release APK
-        run: ./gradlew assembleRelease --no-daemon
-
+      - name: Check and build unsigned release APK
+        run: ./gradlew lintDebug testDebugUnitTest assembleRelease --no-daemon
+      - name: Prepare APK and checksum
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release-unsigned.apk dist/Attendance-nightly-unsigned.apk
+          cd dist
+          sha256sum Attendance-nightly-unsigned.apk > SHA256SUMS.txt
       - name: Upload APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: Attendance-unsigned
-          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          name: Attendance-nightly
+          path: dist/*
           if-no-files-found: error
           retention-days: 30
+
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout built commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Download checked APK
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: Attendance-nightly
+          path: dist
+      - name: Publish nightly prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          current_master=$(gh api "repos/$GH_REPO/git/ref/heads/master" --jq '.object.sha')
+          if [[ "$current_master" != "$GITHUB_SHA" ]]; then
+            echo "Newer master commit exists; keep this run's artifact and skip publishing an older nightly."
+            exit 0
+          fi
+          (cd dist && sha256sum --check SHA256SUMS.txt)
+          cat > nightly-notes.md <<EOF_NOTES
+          自动构建自 master：[$GITHUB_SHA](https://github.com/$GH_REPO/commit/$GITHUB_SHA)
+
+          已通过 Android lint、单元测试和 R8 Release 构建。
+          附件为未签名 APK，安装前需自行签名。SHA256SUMS.txt 用于校验下载文件。
+          nightly 为滚动预发布版本，不替代正式版本。
+          EOF_NOTES
+          git tag --force nightly "$GITHUB_SHA"
+          git push --force origin refs/tags/nightly
+          if gh release view nightly > /dev/null 2>&1; then
+            gh release upload nightly dist/Attendance-nightly-unsigned.apk dist/SHA256SUMS.txt --clobber
+            gh release edit nightly --title "Attendance Nightly" --notes-file nightly-notes.md --prerelease --latest=false
+          else
+            gh release create nightly dist/Attendance-nightly-unsigned.apk dist/SHA256SUMS.txt \
+              --target "$GITHUB_SHA" --title "Attendance Nightly" --notes-file nightly-notes.md --prerelease --latest=false
+          fi

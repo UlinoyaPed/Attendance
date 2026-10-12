@@ -11,6 +11,7 @@ import androidx.compose.ui.unit.dp
 import com.ulinoyaped.attendance.data.AppSettings
 import com.ulinoyaped.attendance.data.ThemeSource
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ThemeSettingsCard(settings: AppSettings, onSetTheme: (ThemeSource, String) -> Unit) {
     var seed by remember(settings.themeSeed) { mutableStateOf(settings.themeSeed) }
@@ -50,7 +51,7 @@ internal fun ThemeSettingsCard(settings: AppSettings, onSetTheme: (ThemeSource, 
                     supportingText = { Text(if (valid) "用于按钮、选中态和进度；自动适配深浅色。" else "请输入六位十六进制颜色，例如 #315A74") },
                     singleLine = true, shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth(),
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     listOf("墨蓝" to "#315A74", "紫" to "#6750A4", "绿" to "#386A54", "橙" to "#8B5000").forEach { (label, color) ->
                         TextButton(onClick = { seed = color; onSetTheme(ThemeSource.CUSTOM, color) }) { Text(label) }
                     }

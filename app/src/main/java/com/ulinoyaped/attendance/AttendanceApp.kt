@@ -1430,10 +1430,12 @@ private fun RollCallScreen(
                                     student,
                                     listOfNotNull(
                                         student.studentNumber.takeIf { effectiveSettings.showStudentNumbers && it.isNotBlank() },
-                                        mark?.status?.label ?: "未处理",
                                         mark?.reason?.takeIf { effectiveSettings.showReasonsInRollCall && it.isNotBlank() },
                                     ).joinToString(" · "),
                                     modifier = Modifier.weight(1f),
+                                    statusText = mark?.status?.label ?: "未处理",
+                                    statusTint = mark?.status?.let { statusColor(effectiveSettings.colorFor(it)) },
+                                    detailMaxLines = if (effectiveSettings.compactRollCallRows) 1 else 2,
                                 )
                             }
                         }
@@ -1897,7 +1899,7 @@ private fun HistoryScreen(
 }
 
 @Composable
-private fun MaterialHistoryItem(className: String, task: MaterialTask, settings: AppSettings, onClick: () -> Unit) {
+internal fun MaterialHistoryItem(className: String, task: MaterialTask, settings: AppSettings, onClick: () -> Unit) {
     val completed = task.records.count { it.status == MaterialRecordStatus.COMPLETED }
     val rejected = task.records.count { it.status == MaterialRecordStatus.REJECTED }
     AttendanceListRow(
@@ -1920,7 +1922,7 @@ private fun MaterialHistoryItem(className: String, task: MaterialTask, settings:
 }
 
 @Composable
-private fun DraftHistoryItem(
+internal fun DraftHistoryItem(
     className: String,
     draft: RollCallDraft,
     titleMode: HistoryTitleMode,
@@ -2720,7 +2722,7 @@ private fun ActionSettingRow(
 }
 
 @Composable
-private fun StatusAppearanceRow(
+internal fun StatusAppearanceRow(
     title: String,
     iconOption: StatusIconOption,
     colorOption: StatusColorOption,
@@ -2728,28 +2730,21 @@ private fun StatusAppearanceRow(
     onColorClick: () -> Unit,
 ) {
     val color = statusColor(colorOption)
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(14.dp, 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Surface(color = statusSurface(color), shape = MaterialTheme.shapes.small) {
-            Icon(
-                statusImageVector(iconOption),
-                contentDescription = null,
-                tint = color,
-                modifier = Modifier.padding(9.dp).size(18.dp),
-            )
+    Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onIconClick) {
+            Surface(color = statusSurface(color), shape = MaterialTheme.shapes.small) {
+                Icon(statusImageVector(iconOption), "修改${title}图标：${iconOption.label}",
+                    tint = color, modifier = Modifier.padding(9.dp).size(18.dp))
+            }
         }
-        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+        Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text("图标：${iconOption.label}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             val prefix = when (title) { "到场" -> "present"; "迟到" -> "late"; "请假" -> "leave"; "缺勤" -> "absent"; else -> "exempt" }
             SettingInheritance("图标", prefix + "Icon")
             SettingInheritance("颜色", prefix + "Color")
         }
-        TextButton(onClick = onIconClick) { Text(iconOption.label) }
-        IconButton(onClick = onColorClick) {
-            Icon(Icons.Default.Palette, contentDescription = "${title}颜色", tint = color)
-        }
+        IconButton(onClick = onColorClick) { Icon(Icons.Default.Palette, "修改${title}颜色：${colorOption.label}", tint = color) }
     }
 }
 
@@ -3037,10 +3032,12 @@ internal fun RollCallItem(
                     student = student,
                     detail = listOfNotNull(
                         student.studentNumber.takeIf { showStudentNumber && it.isNotBlank() },
-                        mark?.status?.label,
                         mark?.reason?.takeIf { showReason && it.isNotBlank() },
                     ).joinToString(" · "),
                     modifier = Modifier.weight(1f),
+                    statusText = mark?.status?.label ?: "未处理",
+                    statusTint = markColor,
+                    detailMaxLines = if (compact) 1 else 2,
                 )
                 if (showStatusButton) {
                     TextButton(onClick = onEdit) { Text("状态") }
@@ -3078,7 +3075,7 @@ private fun StudentListItem(
 }
 
 @Composable
-private fun GlobalHistoryItem(
+internal fun GlobalHistoryItem(
     className: String,
     session: AttendanceSession,
     titleMode: HistoryTitleMode,
@@ -3143,7 +3140,7 @@ private fun DeleteHistoryDialog(
 }
 
 @Composable
-private fun ResultEntryItem(
+internal fun ResultEntryItem(
     entry: AttendanceEntry,
     settings: AppSettings,
     onEdit: () -> Unit,
@@ -3162,6 +3159,7 @@ private fun ResultEntryItem(
                     "原因：${entry.reason}".takeIf { entry.reason.isNotBlank() },
                 ).joinToString(" · "),
                 modifier = Modifier.weight(1f),
+                detailMaxLines = 2,
             )
             IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
                 Icon(

@@ -110,6 +110,93 @@ class RepositorySafetyTest {
         assertEquals(ThemeSource.ATTENDANCE, repository.settings.value.themeSource)
     }
 
+    @Test fun newPresetsUseLegacyWireValuesAndKeepDataAndCustomStatusChoices() {
+        val repository = AttendanceRepository(Store().preferences)
+        repository.addClass("One")
+        val id = repository.classes.value.single().id
+        repository.addStudent(id, "Alice", "202610080001")
+        val student = repository.classes.value.single().students.single()
+        val entries = listOf(AttendanceEntry(student.id, student.name, student.studentNumber, AttendanceStatus.LEAVE, "trip"))
+        repository.saveSession(id, entries)
+        repository.saveRollCallDraft(id, entries)
+        repository.createMaterialTask(id, "Forms", listOf("Consent", "Registration"))
+        repository.setStatusColor(AttendanceStatus.ABSENT, StatusColorOption.PURPLE)
+        repository.setStatusColor(AttendanceStatus.PRESENT, StatusColorOption.PRIMARY)
+        repository.setClassAttendanceSettings(id, ClassAttendanceSettings(
+            values = repository.settings.value.copy(absentColor = StatusColorOption.TEAL), overriddenFields = setOf("absentColor"),
+        ))
+        val classes = repository.classes.value
+        val sessions = repository.sessions.value
+        val drafts = repository.drafts.value
+        for (source in ThemeSource.entries) {
+            repository.setTheme(source, "#FF0000")
+            assertTrue(repository.awaitSaved())
+            val backup = JSONObject(repository.exportBackup())
+            val options = backup.getJSONObject("settings")
+            assertTrue(options.getString("themeSource") in listOf("SYSTEM", "CUSTOM"))
+            if (source in setOf(ThemeSource.ATTENDANCE, ThemeSource.SOFT)) assertEquals(source.name, options.getString("themePreset"))
+            else assertFalse(options.has("themePreset"))
+            val restored = AttendanceRepository(Store().preferences)
+            assertTrue(restored.importBackup(backup.toString()))
+            assertEquals(source, restored.settings.value.themeSource)
+            assertEquals("#FF0000", restored.settings.value.themeSeed)
+            assertEquals(StatusColorOption.PURPLE, restored.settings.value.absentColor)
+            assertEquals(StatusColorOption.PRIMARY, restored.settings.value.presentColor)
+            assertEquals(StatusColorOption.TEAL, restored.settings.value.forClass(restored.classes.value.single()).absentColor)
+            assertEquals(classes, restored.classes.value)
+            assertEquals(sessions, restored.sessions.value)
+            assertEquals(drafts, restored.drafts.value)
+        }
+    }
+
+    @Test fun acceptsDirectPresetBackupsFromVisualRefactorAndRejectsInvalidMetadataAtomically() {
+        val store = Store()
+        val repository = AttendanceRepository(store.preferences)
+        for (source in listOf(ThemeSource.ATTENDANCE, ThemeSource.SOFT)) {
+            val originalFormat = JSONObject(repository.exportBackup())
+            originalFormat.getJSONObject("settings").remove("themePreset")
+            originalFormat.getJSONObject("settings").put("themeSource", source.name)
+            assertTrue(repository.importBackup(originalFormat.toString()))
+            assertEquals(source, repository.settings.value.themeSource)
+        }
+        assertTrue(repository.awaitSaved())
+        val before = store.values.toMap()
+        val invalid = JSONObject(repository.exportBackup())
+        invalid.getJSONObject("settings").put("themePreset", "UNKNOWN")
+        assertFalse(repository.importBackup(invalid.toString()))
+        assertEquals(before, store.values.toMap())
+        assertEquals(ThemeSource.SOFT, repository.settings.value.themeSource)
+    }
+
+    @Test fun exportingImmediatelyAfterUpgradeAdaptsOnlyTheConfirmedSnapshot() {
+        val store = Store()
+        val repository = AttendanceRepository(store.preferences)
+        repository.addClass("One")
+        val id = repository.classes.value.single().id
+        repository.setClassAttendanceSettings(id, ClassAttendanceSettings(
+            values = repository.settings.value.copy(absentColor = StatusColorOption.PURPLE), overriddenFields = setOf("absentColor"),
+        ))
+        assertTrue(repository.awaitSaved())
+        val oldSnapshot = JSONObject(repository.exportBackup())
+        oldSnapshot.getJSONObject("settings").put("themeSource", "SOFT").remove("themePreset")
+        oldSnapshot.getJSONArray("classes").getJSONObject(0).getJSONObject("attendanceSettings").getJSONObject("values")
+            .put("themeSource", "ATTENDANCE").remove("themePreset")
+        store.values["verified_snapshot"] = oldSnapshot.toString()
+        store.values["settings"] = oldSnapshot.getJSONObject("settings").toString()
+        store.values["classes"] = oldSnapshot.getJSONArray("classes").toString()
+        val confirmedBefore = store.values.toMap()
+        val upgraded = AttendanceRepository(store.preferences)
+        assertEquals(ThemeSource.SOFT, upgraded.settings.value.themeSource)
+        val exported = JSONObject(upgraded.exportBackup())
+        assertEquals("CUSTOM", exported.getJSONObject("settings").getString("themeSource"))
+        assertEquals("SOFT", exported.getJSONObject("settings").getString("themePreset"))
+        val local = exported.getJSONArray("classes").getJSONObject(0).getJSONObject("attendanceSettings").getJSONObject("values")
+        assertEquals("CUSTOM", local.getString("themeSource"))
+        assertEquals("ATTENDANCE", local.getString("themePreset"))
+        assertEquals(StatusColorOption.PURPLE, upgraded.settings.value.forClass(upgraded.classes.value.single()).absentColor)
+        assertEquals(confirmedBefore, store.values.toMap())
+    }
+
     @Test fun classOverrideBackupRoundTripsAndRejectsUnknownKeys() {
         val store = Store()
         val repository = AttendanceRepository(store.preferences)

@@ -1,5 +1,6 @@
 package com.ulinoyaped.attendance.ui.theme
 
+import com.ulinoyaped.attendance.data.ThemeSource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
@@ -45,4 +46,27 @@ class ThemeContrastTest {
             }
         }
     }
+    @Test fun allPresetRoutesKeepStatusSemanticsAndSystemFallback() {
+        for (dark in listOf(false, true)) {
+            val custom = attendanceColorScheme(ThemeSource.CUSTOM, "#FF0000", dark)
+            val standard = attendanceColorScheme(ThemeSource.ATTENDANCE, "#FF0000", dark)
+            val fallback = attendanceColorScheme(ThemeSource.SYSTEM, "#FF0000", dark)
+            assertEquals(standard.primary, fallback.primary)
+            assertEquals(standard.surface, fallback.surface)
+            assertEquals(standard.onSurface, fallback.onSurface)
+            val dynamic = defaultColorScheme(dark).copy(primary = custom.primary, onPrimary = custom.onPrimary)
+            assertEquals(custom.primary, attendanceColorScheme(ThemeSource.SYSTEM, "#315A74", dark, dynamic).primary)
+            for (source in ThemeSource.entries) {
+                val scheme = attendanceColorScheme(source, "#FF0000", dark, dynamic)
+                for (option in StatusColorOption.entries.filter { it != StatusColorOption.PRIMARY }) {
+                    val color = semanticColor(option, dark, scheme.primary)
+                    assertEquals(semanticColor(option, dark, standard.primary), color)
+                    assertTrue(contrast(color, scheme.surface) >= 4.5f)
+                }
+                // Theme-dependent color is preserved only when the user explicitly chose PRIMARY.
+                assertEquals(scheme.primary, semanticColor(StatusColorOption.PRIMARY, dark, scheme.primary))
+            }
+        }
+    }
+
 }

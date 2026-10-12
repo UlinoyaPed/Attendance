@@ -1,5 +1,7 @@
 package com.ulinoyaped.attendance
 
+import android.os.Build
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -14,17 +16,22 @@ import com.ulinoyaped.attendance.ui.theme.*
 
 // Debug-only fixtures: previews never access repositories or a user's stored classes.
 private val previewStudents = listOf(
-    Student("1", "张三", "2026001"), Student("2", "李晓明", "2026002"),
+    Student("1", "张三", "202610080001"), Student("2", "李晓明", "2026002"),
     Student("3", "王同学", "2026003"), Student("4", "阿依古丽·买买提", "2026004"),
     Student("5", "陈静", "2026005"), Student("6", "赵远", "2026006"),
 )
 
 @Composable
-private fun PreviewTheme(soft: Boolean = false, content: @Composable () -> Unit) {
+private fun PreviewTheme(source: ThemeSource = ThemeSource.ATTENDANCE, seed: String = "#315A74", content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
+    val soft = source == ThemeSource.SOFT
+    val context = LocalContext.current
+    val dynamic = if (source == ThemeSource.SYSTEM && Build.VERSION.SDK_INT >= 31) {
+        if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    } else null
     CompositionLocalProvider(LocalAttendanceLayout provides AttendanceLayout(dark, soft)) {
         MaterialTheme(
-            colorScheme = attendanceSurfaces(defaultColorScheme(dark), dark, soft),
+            colorScheme = attendanceColorScheme(source, seed, dark, dynamic),
             shapes = attendanceShapes(soft), typography = AttendanceTypography,
         ) { Surface(color = MaterialTheme.colorScheme.background, content = content) }
     }
@@ -41,7 +48,7 @@ private fun StudentRowsPreview() = PreviewTheme {
         item { RollCallSearchTools("", {}, RollCallFilter.ALL, {}) }
         AttendanceStatus.entries.forEachIndexed { index, status ->
             item {
-                val mark = if (status == AttendanceStatus.UNMARKED) null else AttendanceMark(status, if (status == AttendanceStatus.LEAVE) "比赛外出" else "")
+                val mark = if (status == AttendanceStatus.UNMARKED) null else AttendanceMark(status, if (status == AttendanceStatus.LEAVE) "比赛外出，本周五返回，已获班主任批准" else "")
                 RollCallItem(
                     previewStudents[index], mark, mark?.let { settings.iconFor(it.status) }, mark?.let { settings.colorFor(it.status) },
                     showStudentNumber = true, showReason = true, showStatusButton = true, compact = false,
@@ -78,9 +85,72 @@ private fun HomePreview() = PreviewTheme {
 @Preview(name = "柔和风格 · 浅色", widthDp = 360, heightDp = 720)
 @Preview(name = "柔和风格 · 深色", widthDp = 360, heightDp = 720, uiMode = 0x20)
 @Composable
-private fun SoftSettingsPreview() = PreviewTheme(soft = true) {
+private fun SoftSettingsPreview() = PreviewTheme(ThemeSource.SOFT) {
     Column(Modifier.padding(16.dp)) {
         Text("外观与头像", style = MaterialTheme.typography.headlineMedium)
         ThemeSettingsCard(AppSettings(themeSource = ThemeSource.SOFT), { _, _ -> })
+    }
+}
+
+@Preview(name = "自定义 · 窄屏大字体", widthDp = 320, heightDp = 1000, fontScale = 1.5f)
+@Preview(name = "自定义 · 深色窄屏大字体", widthDp = 320, heightDp = 1000, fontScale = 1.5f, uiMode = 0x20)
+@Composable
+private fun CustomAppearancePreview() = PreviewTheme(ThemeSource.CUSTOM, "#FF0000") {
+    LazyColumn(Modifier.padding(16.dp)) {
+        item { ThemeSettingsCard(AppSettings(themeSource = ThemeSource.CUSTOM, themeSeed = "#FF0000"), { _, _ -> }) }
+        item {
+            CompositionLocalProvider(LocalClassSettingsScope provides ClassSettingsScope("一班", setOf("exemptIcon", "exemptColor"), {}, {}, {})) {
+                Column {
+                StatusAppearanceRow("不参与", StatusIconOption.REMOVE, StatusColorOption.TEAL, {}, {})
+                StatusAppearanceRow("缺勤", StatusIconOption.WARNING, StatusColorOption.PURPLE, {}, {})
+                }
+            }
+        }
+    }
+}
+
+@Preview(name = "历史 · 窄屏大字体", widthDp = 320, heightDp = 900, fontScale = 1.5f)
+@Preview(name = "历史 · 深色窄屏大字体", widthDp = 320, heightDp = 900, fontScale = 1.5f, uiMode = 0x20)
+@Composable
+private fun HistoryPreview() = PreviewTheme {
+    val time = 1791417600000L
+    val entries = previewStudents.map { AttendanceEntry(it.id, it.name, it.studentNumber, AttendanceStatus.LEAVE, "比赛外出，本周五返回") }
+    LazyColumn(Modifier.padding(16.dp)) {
+        item { Text("历史与结果", style = MaterialTheme.typography.headlineMedium) }
+        item { DraftHistoryItem("2026 秋季 · 综合实践课程一班", RollCallDraft("draft", "class", time, time, entries), HistoryTitleMode.CLASS_NAME, {}, {}) }
+        item { GlobalHistoryItem("2026 秋季 · 综合实践课程一班", AttendanceSession("session", "class", time, entries), HistoryTitleMode.TIME, true, {}, {}, {}) }
+        item { ResultEntryItem(entries.last(), AppSettings(), {}) }
+        item {
+            MaterialHistoryItem("2026 秋季 · 综合实践课程一班",
+                MaterialTask("task", "家长知情同意与活动材料收集", time, time, time,
+                    listOf(MaterialItem("form", "知情同意书")), previewStudents), AppSettings(), {})
+        }
+    }
+}
+
+@Preview(name = "动态色 · 状态分工", widthDp = 360, heightDp = 500, apiLevel = 35)
+@Preview(name = "动态色 · 深色状态分工", widthDp = 360, heightDp = 500, apiLevel = 35, uiMode = 0x20)
+@Composable
+private fun DynamicStatusPreview() = PreviewTheme(ThemeSource.SYSTEM) {
+    Column(Modifier.padding(16.dp)) {
+        val settings = AppSettings()
+        AttendanceStatus.entries.filter { it != AttendanceStatus.UNMARKED }.forEachIndexed { index, status ->
+            RollCallItem(previewStudents[index], AttendanceMark(status), settings.iconFor(status), settings.colorFor(status),
+                true, true, false, false, {}, {}, {}, {}, settings, {})
+        }
+    }
+}
+
+@Preview(name = "相同自定义图标颜色 · 窄屏深色", widthDp = 320, heightDp = 900, fontScale = 1.5f, uiMode = 0x20)
+@Composable
+private fun SameMarkersPreview() = PreviewTheme(ThemeSource.CUSTOM, "#FF0000") {
+    val settings = AppSettings()
+    LazyColumn(Modifier.padding(16.dp)) {
+        AttendanceStatus.entries.filter { it != AttendanceStatus.UNMARKED }.forEachIndexed { index, status ->
+            item {
+                RollCallItem(previewStudents[index], AttendanceMark(status, "活动外出，预计周五返校"),
+                    StatusIconOption.PERSON, StatusColorOption.PRIMARY, true, true, false, false, {}, {}, {}, {}, settings, {})
+            }
+        }
     }
 }

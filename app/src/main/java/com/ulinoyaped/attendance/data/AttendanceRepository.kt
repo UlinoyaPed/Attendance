@@ -490,7 +490,23 @@ class AttendanceRepository internal constructor(private val preferences: android
 
     fun exportBackup(): String = writer.submit<String> {
         check(_storageError.value == null) { "数据保存失败，请先恢复" }
-        JSONObject(checkNotNull(lastConfirmedSnapshot)).toString(2)
+        val confirmed = JSONObject(checkNotNull(lastConfirmedSnapshot))
+        // A 3c77235 snapshot can still be the last committed snapshot immediately after
+        // upgrading. Adapt that confirmed JSON, never export unsaved live state instead.
+        fun compatibleTheme(options: JSONObject) {
+            if (options.optString("themeSource") in setOf(ThemeSource.ATTENDANCE.name, ThemeSource.SOFT.name)) {
+                if (!options.has("themePreset")) options.put("themePreset", options.getString("themeSource"))
+                options.put("themeSource", ThemeSource.CUSTOM.name)
+            }
+        }
+        compatibleTheme(confirmed.getJSONObject("settings"))
+        val classes = confirmed.getJSONArray("classes")
+        for (index in 0 until classes.length()) {
+            classes.getJSONObject(index).optJSONObject("attendanceSettings")?.let { options ->
+                compatibleTheme(options.optJSONObject("values") ?: options)
+            }
+        }
+        confirmed.toString(2)
     }.get()
 
     fun awaitSaved(): Boolean = writer.submit<Boolean> { _storageError.value == null }.get()
@@ -700,7 +716,10 @@ class AttendanceRepository internal constructor(private val preferences: android
     private fun settingsToJson(settings: AppSettings): JSONObject {
         val reasons = JSONArray().apply { settings.absenceReasons.forEach { put(it) } }
         return JSONObject()
-            .put("themeSource", settings.themeSource.name)
+            // Version-1 readers only know SYSTEM/CUSTOM. Keep the seed as their fallback,
+            // and store the new style separately so they can still restore all business data.
+            .put("themeSource", if (settings.themeSource in setOf(ThemeSource.ATTENDANCE, ThemeSource.SOFT)) ThemeSource.CUSTOM.name else settings.themeSource.name)
+            .put("themePreset", settings.themeSource.takeIf { it in setOf(ThemeSource.ATTENDANCE, ThemeSource.SOFT) }?.name)
             .put("themeSeed", settings.themeSeed)
             .put("materialAvatarCompletesAll", settings.materialAvatarCompletesAll)
             .put("showMaterialProgress", settings.showMaterialProgress)
@@ -941,7 +960,8 @@ class AttendanceRepository internal constructor(private val preferences: android
         }
         require(!json.has("defaultStatus") || json.getString("defaultStatus") in AttendanceStatus.entries.filter { it != AttendanceStatus.UNMARKED }.map { it.name })
         return defaults.copy(
-            themeSource = enumValueOrDefault(json.optString("themeSource"), defaults.themeSource),
+            themeSource = if (json.has("themePreset")) enumValueOf<ThemeSource>(json.getString("themePreset"))
+                else enumValueOrDefault(json.optString("themeSource"), defaults.themeSource),
             themeSeed = json.optString("themeSeed", defaults.themeSeed).also { require(Regex("#[0-9a-fA-F]{6}").matches(it)) },
             materialAvatarCompletesAll = json.optBoolean("materialAvatarCompletesAll", defaults.materialAvatarCompletesAll),
             showMaterialProgress = json.optBoolean("showMaterialProgress", defaults.showMaterialProgress),
