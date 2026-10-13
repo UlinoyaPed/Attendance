@@ -12,3 +12,14 @@ app/build/
 *.aab
 hs_err_pid*
 replay_pid*
+
+# User signing material stays outside version control.
+*.jks
+*.keystore
+*.ks
+*-signing-base64.txt
+*.p12
+*.pfx
+keystore.properties
+signing.properties
+dist/

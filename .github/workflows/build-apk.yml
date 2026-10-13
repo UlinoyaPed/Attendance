@@ -29,12 +29,26 @@ jobs:
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
       - name: Check and build unsigned release APK
         run: ./gradlew lintDebug testDebugUnitTest assembleRelease --no-daemon
-      - name: Prepare APK and checksum
+      - name: Test signing with disposable keys
+        run: python3 .github/scripts/test-sign-nightly.py
+      - name: Prepare unsigned APK
         run: |
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release-unsigned.apk dist/Attendance-nightly-unsigned.apk
+      - name: Sign APK with user keystore
+        if: github.ref == 'refs/heads/master'
+        env:
+          SIGN_KEY_BASE64: ${{ secrets.SIGNING_KEY }}
+          SIGN_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SIGN_KEY_PWD: ${{ secrets.KEY_PASSWORD }}
+        run: .github/scripts/sign-nightly.sh
+      - name: Generate checksums
+        run: |
           cd dist
-          sha256sum Attendance-nightly-unsigned.apk > SHA256SUMS.txt
+          sha256sum ./*.apk > SHA256SUMS.txt
+          if [[ -f SIGNING-CERTIFICATE.txt ]]; then
+            sha256sum SIGNING-CERTIFICATE.txt >> SHA256SUMS.txt
+          fi
       - name: Upload APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -70,19 +84,34 @@ jobs:
             exit 0
           fi
           (cd dist && sha256sum --check SHA256SUMS.txt)
+          if [[ -f dist/Attendance-nightly.apk ]]; then
+            signing_note="Attendance-nightly.apk 已使用用户提供的 keystore 签名并验证，可直接安装。SIGNING-CERTIFICATE.txt 为公开证书指纹。另附未签名 APK。"
+          else
+            signing_note="未配置签名 Secrets；当前仅提供未签名 APK，安装前需自行签名。"
+          fi
           cat > nightly-notes.md <<EOF_NOTES
           自动构建自 master：[$GITHUB_SHA](https://github.com/$GH_REPO/commit/$GITHUB_SHA)
 
           已通过 Android lint、单元测试和 R8 Release 构建。
-          附件为未签名 APK，安装前需自行签名。SHA256SUMS.txt 用于校验下载文件。
+          $signing_note
+          SHA256SUMS.txt 用于校验下载文件。
           nightly 为滚动预发布版本，不替代正式版本。
           EOF_NOTES
           git tag --force nightly "$GITHUB_SHA"
           git push --force origin refs/tags/nightly
           if gh release view nightly > /dev/null 2>&1; then
-            gh release upload nightly dist/Attendance-nightly-unsigned.apk dist/SHA256SUMS.txt --clobber
+            gh release upload nightly dist/* --clobber
+            # Do not leave a signed APK from a previous commit on an unsigned-only release.
+            if [[ ! -f dist/Attendance-nightly.apk ]]; then
+              gh release view nightly --json assets --jq '.assets[].name' > existing-assets.txt
+              for stale in Attendance-nightly.apk SIGNING-CERTIFICATE.txt; do
+                if grep -Fxq "$stale" existing-assets.txt; then
+                  gh release delete-asset nightly "$stale" --yes
+                fi
+              done
+            fi
             gh release edit nightly --title "Attendance Nightly" --notes-file nightly-notes.md --prerelease --latest=false
           else
-            gh release create nightly dist/Attendance-nightly-unsigned.apk dist/SHA256SUMS.txt \
+            gh release create nightly dist/* \
               --target "$GITHUB_SHA" --title "Attendance Nightly" --notes-file nightly-notes.md --prerelease --latest=false
           fi

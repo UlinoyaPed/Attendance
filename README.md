@@ -42,7 +42,7 @@
 ./gradlew assembleDebug
 ```
 
-GitHub Actions “Build and publish nightly” 在每次推送 master 时自动运行，也支持手动执行。lint、单元测试和 R8 Release 构建通过后，将未签名的 `Attendance-nightly-unsigned.apk` 与 SHA-256 发布至 [nightly 预发布](https://github.com/UlinoyaPed/Attendance/releases/tag/nightly)。APK 安装前需自行签名；没有引入签名密钥或额外 secrets。构建失败不更新 nightly，较旧的排队提交不覆盖当前 master 的发布。
+GitHub Actions “Build and publish nightly” 在每次推送 master 时自动运行，也支持手动执行。lint、单元测试和 R8 Release 构建通过后，将 APK 与 SHA-256 发布至 [nightly 预发布](https://github.com/UlinoyaPed/Attendance/releases/tag/nightly)。配置与 fcitx5-android 相同的 `SIGNING_KEY`、`KEY_ALIAS`、`KEY_PASSWORD` 后，会发布已验签、可安装的 `Attendance-nightly.apk`；未配置时保留未签名版。密钥由用户本机生成并录入 GitHub Secrets，详见 [签名配置](docs/signing.md)。构建失败不更新 nightly，较旧的排队提交不覆盖当前 master 的发布。
 
 材料登记保留每名学生下面多份材料的布局，每份材料支持左滑标记不合格、右滑标记已完成，并与点名复用滑动组件。点击学生头像默认确认该生未登记的材料；遇到不合格项会提示，只有明确选择覆盖才确认全部。单项修改、清除和头像批量确认都支持最近一次操作撤销。状态使用独立于主题主色的深浅色业务语义映射。历史中点击点名记录查看结果，点击“编辑”返回点名操作页，保留当次名单并更新原记录。
 
