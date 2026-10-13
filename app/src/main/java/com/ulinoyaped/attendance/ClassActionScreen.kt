@@ -39,6 +39,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.foundation.background
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
@@ -63,7 +67,7 @@ internal fun ClassActionScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("选择工作") },
+                title = { Text("班级事务") },
                 actions = { ProfileAvatarButton(profileIcon, onChooseClass) },
             )
         },
@@ -75,16 +79,12 @@ internal fun ClassActionScreen(
             verticalArrangement = Arrangement.spacedBy(LocalAttendanceLayout.current.groupGap),
         ) {
             item {
-                Text(group?.name ?: "尚未选择班级", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-                if (group == null || settings.showClassStudentCount || settings.showClassOperationHint) Text(
-                    if (group == null) "点击右上角头像创建或选择班级。"
-                    else listOfNotNull(
+                FeatureHeader(
+                    title = group?.name ?: "选择一个班级",
+                    subtitle = if (group == null) "点击右上角头像创建或选择班级" else listOfNotNull(
                         "${group.students.size} 名学生".takeIf { settings.showClassStudentCount },
-                        "点击右上角头像切换班级".takeIf { settings.showClassOperationHint },
-                    ).joinToString(" · "),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 5.dp, bottom = 8.dp),
+                        "右上角切换班级".takeIf { settings.showClassOperationHint },
+                    ).joinToString(" · "), icon = Icons.Default.Groups,
                 )
             }
             if (group != null) item {
@@ -93,6 +93,7 @@ internal fun ClassActionScreen(
                     subtitle = "创建一次新的点名记录",
                     icon = Icons.Default.CheckCircle,
                     iconColor = MaterialTheme.colorScheme.primary,
+                    prominent = true,
                     onClick = onStartAttendance,
                 )
             }
@@ -101,7 +102,7 @@ internal fun ClassActionScreen(
                     title = "材料登记",
                     subtitle = "自定义本次名称和一份或多份材料",
                     icon = Icons.Default.Inventory2,
-                    iconColor = MaterialTheme.colorScheme.primary,
+                    iconColor = MaterialTheme.colorScheme.tertiary,
                     onClick = { showMaterialDialog = true },
                 )
             }
@@ -135,28 +136,34 @@ private fun ClassActionItem(
     icon: ImageVector,
     iconColor: Color,
     onClick: () -> Unit,
+    prominent: Boolean = false,
 ) {
-    AttendancePanel(
+    val scheme = MaterialTheme.colorScheme
+    Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = MaterialTheme.shapes.large,
+        color = if (prominent) scheme.primary else scheme.surface,
+        contentColor = if (prominent) scheme.onPrimary else scheme.onSurface,
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier.fillMaxWidth().then(if (prominent) Modifier.background(Brush.linearGradient(listOf(scheme.primary, lerp(scheme.primary, scheme.secondary, 0.20f)))) else Modifier).padding(18.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Surface(
-                modifier = Modifier.size(36.dp),
-                shape = MaterialTheme.shapes.small,
-                color = statusSurface(iconColor),
+                modifier = Modifier.size(42.dp),
+                shape = MaterialTheme.shapes.medium,
+                color = if (prominent) scheme.onPrimary.copy(alpha = 0.14f) else statusSurface(iconColor),
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(icon, contentDescription = null, tint = iconColor, modifier = Modifier.size(22.dp))
+                    Icon(icon, contentDescription = null, tint = if (prominent) scheme.onPrimary else iconColor, modifier = Modifier.size(24.dp))
                 }
             }
             Spacer(Modifier.width(14.dp))
-            Column {
+            Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = if (prominent) scheme.onPrimary else scheme.onSurfaceVariant)
             }
+            Icon(Icons.Default.ChevronRight, null, modifier = Modifier.size(22.dp), tint = if (prominent) scheme.onPrimary else scheme.onSurfaceVariant)
         }
     }
 }

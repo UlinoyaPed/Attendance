@@ -121,15 +121,13 @@ internal fun MaterialTaskScreen(
                 val total = task.participants.size * task.materials.size
                 val done = task.records.count { it.status == MaterialRecordStatus.COMPLETED }
                 val rejected = task.records.count { it.status == MaterialRecordStatus.REJECTED }
-                Column {
-                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                        Text("${task.materials.joinToString("、") { it.name }}", style = MaterialTheme.typography.titleMedium)
-                        if (settings.showMaterialProgress) Text("已完成 $done/$total · 不合格 $rejected", style = MaterialTheme.typography.bodyMedium)
-                        if (settings.showMaterialOperationHint) Text(
-                            "右滑确认 · 左滑不合格 · 长按修改状态" + if (settings.materialAvatarCompletesAll) " · 头像确认未登记材料" else "",
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp),
-                        )
-                    }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FeatureHeader(task.materials.joinToString("、") { it.name },
+                        if (settings.showMaterialProgress) "已完成 $done/$total · 不合格 $rejected" else "逐份登记本次材料",
+                        Icons.Default.Inventory2)
+                    if (settings.showMaterialOperationHint) Text(
+                        "右滑确认 · 左滑不合格 · 长按修改状态" + if (settings.materialAvatarCompletesAll) " · 头像确认未登记材料" else "",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 8.dp))
                 }
             }
             items(task.participants, key = { it.id }) { student ->

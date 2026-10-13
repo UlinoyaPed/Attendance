@@ -4,6 +4,7 @@ import com.ulinoyaped.attendance.data.ThemeSource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.lerp
 import com.ulinoyaped.attendance.data.StatusColorOption
 import org.junit.Assert.*
 import org.junit.Test
@@ -65,6 +66,24 @@ class ThemeContrastTest {
                 }
                 // Theme-dependent color is preserved only when the user explicitly chose PRIMARY.
                 assertEquals(scheme.primary, semanticColor(StatusColorOption.PRIMARY, dark, scheme.primary))
+            }
+        }
+    }
+
+    @Test fun tintedSettingsAndFeaturedActionsRetainReadableForegrounds() {
+        for (dark in listOf(false, true)) for (source in ThemeSource.entries) {
+            for (seed in listOf("#5559C9", "#FF0000", "#00FF00", "#FFFFFF", "#000000")) {
+                val scheme = attendanceColorScheme(source, seed, dark, defaultColorScheme(dark))
+                val actionEnd = lerp(scheme.primary, scheme.secondary, 0.20f)
+                val headerEnd = lerp(scheme.primaryContainer, scheme.surface, 0.55f)
+                assertTrue("featured action $source dark=$dark seed=$seed", contrast(scheme.onPrimary, actionEnd) >= 4.5f)
+                for (color in listOf(scheme.primaryContainer, headerEnd)) {
+                    assertTrue("header $source dark=$dark seed=$seed", contrast(scheme.onPrimaryContainer, color) >= 4.5f)
+                }
+                for (color in listOf(scheme.surfaceContainerLow, scheme.surfaceContainerHighest)) {
+                    assertTrue(contrast(scheme.onSurfaceVariant, color) >= 4.5f)
+                    assertTrue(contrast(scheme.primary, color) >= 4.5f)
+                }
             }
         }
     }

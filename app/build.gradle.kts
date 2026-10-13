@@ -35,6 +35,8 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    testOptions { unitTests.isIncludeAndroidResources = true }
+
     buildFeatures {
         compose = true
         buildConfig = true
@@ -47,6 +49,9 @@ android {
 dependencies {
     implementation("com.google.android.material:material:1.12.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("org.json:json:20240303")
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.activity:activity-compose:1.10.0")
@@ -58,3 +63,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
+
+// Native Android rendering stays in JVM tests; no renderer is packaged in release APKs.
+tasks.withType<Test>().configureEach { maxHeapSize = "1g" }

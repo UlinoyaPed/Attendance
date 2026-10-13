@@ -17,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import com.ulinoyaped.attendance.data.Student
@@ -56,7 +57,7 @@ internal fun AttendancePanel(modifier: Modifier = Modifier, content: @Composable
     Surface(
         modifier = modifier.fillMaxWidth(), shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
     ) { Column(content = content) }
 }
 
@@ -67,7 +68,7 @@ internal fun AttendanceListRow(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Surface(
-        modifier = modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface,
+        modifier = modifier.fillMaxWidth(), color = if (accent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f).compositeOver(MaterialTheme.colorScheme.surface) else MaterialTheme.colorScheme.surface,
         shape = MaterialTheme.shapes.small,
         border = if (accent) BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)) else null,
     ) {

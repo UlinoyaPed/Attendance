@@ -29,6 +29,16 @@ jobs:
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4.4.3
       - name: Check and build unsigned release APK
         run: ./gradlew lintDebug testDebugUnitTest assembleRelease --no-daemon
+      - name: Upload rendered UI and test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Attendance-ui-checks
+          path: |
+            app/build/reports/ui/*.png
+            app/build/reports/tests/testDebugUnitTest/**
+          if-no-files-found: warn
+          retention-days: 30
       - name: Test signing with disposable keys
         run: python3 .github/scripts/test-sign-nightly.py
       - name: Prepare unsigned APK

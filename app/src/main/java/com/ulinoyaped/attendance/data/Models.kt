@@ -194,7 +194,7 @@ enum class ThemeSource { ATTENDANCE, SOFT, SYSTEM, CUSTOM }
 
 data class AppSettings(
     val themeSource: ThemeSource = ThemeSource.ATTENDANCE,
-    val themeSeed: String = "#315A74",
+    val themeSeed: String = "#5559C9",
     val materialAvatarCompletesAll: Boolean = true,
     val showMaterialProgress: Boolean = true,
     val showMaterialOperationHint: Boolean = true,

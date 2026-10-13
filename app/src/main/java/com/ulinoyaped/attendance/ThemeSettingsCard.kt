@@ -1,62 +1,88 @@
 package com.ulinoyaped.attendance
 
 import android.os.Build
-import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.ulinoyaped.attendance.data.AppSettings
 import com.ulinoyaped.attendance.data.ThemeSource
+import com.ulinoyaped.attendance.ui.theme.*
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ThemeSettingsCard(settings: AppSettings, onSetTheme: (ThemeSource, String) -> Unit) {
     var seed by remember(settings.themeSeed) { mutableStateOf(settings.themeSeed) }
     val valid = Regex("#[0-9a-fA-F]{6}").matches(seed)
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("主题风格", style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 12.dp))
-        ThemeSource.entries.forEach { source ->
-            val (name, description) = when (source) {
-                ThemeSource.ATTENDANCE -> "Attendance" to "墨蓝强调 · 中性背景 · 紧凑清晰"
-                ThemeSource.SOFT -> "柔和" to "温和底色 · 更圆润的分组与留白"
-                ThemeSource.SYSTEM -> "系统动态" to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                    "使用壁纸配色，保留 Attendance 的界面层级" else "Android 12 以下使用 Attendance 配色"
-                ThemeSource.CUSTOM -> "自定义" to "选择主色，背景与状态色保持协调"
-            }
-            Row(
-                Modifier.fillMaxWidth().selectable(
-                    selected = settings.themeSource == source,
-                    role = androidx.compose.ui.semantics.Role.RadioButton,
-                    onClick = { onSetTheme(source, settings.themeSeed) },
-                ).padding(horizontal = 4.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RadioButton(selected = settings.themeSource == source, onClick = null)
-                Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                    Text(name, style = MaterialTheme.typography.titleMedium)
-                    Text(description, style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    val context = LocalContext.current
+    val dark = LocalAttendanceLayout.current.dark
+    val dynamic = if (Build.VERSION.SDK_INT >= 31) {
+        if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    } else null
+    SettingsGroup(title = "主题风格", subtitle = "配色、圆角和留白共同构成界面风格") {
+        BoxWithConstraints(Modifier.fillMaxWidth().padding(12.dp)) {
+            val columns = if (maxWidth < 320.dp && LocalDensity.current.fontScale > 1.2f) 1 else 2
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                ThemeSource.entries.chunked(columns).forEach { options ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        options.forEach { source ->
+                            val preview = attendanceColorScheme(source, settings.themeSeed, dark, dynamic)
+                            val active = settings.themeSource == source
+                            val (name, description) = when (source) {
+                                ThemeSource.ATTENDANCE -> "Attendance" to "明快蓝紫 · 清晰层次"
+                                ThemeSource.SOFT -> "柔和" to "温暖底色 · 圆润留白"
+                                ThemeSource.SYSTEM -> "系统动态" to if (Build.VERSION.SDK_INT >= 31) "取自壁纸，随系统变化" else "当前系统使用默认配色"
+                                ThemeSource.CUSTOM -> "自定义" to "用你喜欢的主色"
+                            }
+                            Surface(modifier = Modifier.weight(1f).selectable(active, role = Role.RadioButton,
+                                onClick = { onSetTheme(source, settings.themeSeed) }),
+                                shape = MaterialTheme.shapes.medium,
+                                color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+                                border = BorderStroke(if (active) 2.dp else 1.dp, if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) {
+                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        listOf(preview.primary, preview.secondary, preview.tertiary).forEach { color ->
+                                            Surface(Modifier.size(18.dp), shape = CircleShape, color = color) {}
+                                        }
+                                        Spacer(Modifier.weight(1f))
+                                        if (active) Icon(Icons.Default.CheckCircle, "已选择", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                    }
+                                    Text(name, style = MaterialTheme.typography.titleSmall,
+                                        color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface)
+                                    Text(description, style = MaterialTheme.typography.bodySmall,
+                                        color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
         if (settings.themeSource == ThemeSource.CUSTOM) {
-            Column(Modifier.padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                OutlinedTextField(
-                    value = seed, onValueChange = { seed = it.take(7) },
-                    label = { Text("主颜色 #RRGGBB") }, isError = !valid,
-                    supportingText = { Text(if (valid) "用于按钮、选中态和进度；自动适配深浅色。" else "请输入六位十六进制颜色，例如 #315A74") },
-                    singleLine = true, shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth(),
-                )
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    listOf("墨蓝" to "#315A74", "紫" to "#6750A4", "绿" to "#386A54", "橙" to "#8B5000").forEach { (label, color) ->
-                        TextButton(onClick = { seed = color; onSetTheme(ThemeSource.CUSTOM, color) }) { Text(label) }
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("快捷配色", style = MaterialTheme.typography.titleSmall)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("蓝紫" to "#5559C9", "湖蓝" to "#0061A4", "紫" to "#6750A4", "玫红" to "#B83384", "青绿" to "#007D78", "橙" to "#945500").forEach { (label, color) ->
+                        FilterChip(selected = settings.themeSeed.equals(color, true), onClick = { seed = color; onSetTheme(ThemeSource.CUSTOM, color) },
+                            label = { Text(label) }, leadingIcon = {
+                                Surface(Modifier.size(16.dp), shape = CircleShape, color = attendanceColorScheme(ThemeSource.CUSTOM, color, dark).primary) {}
+                            })
                     }
                 }
-                Button(shape = MaterialTheme.shapes.small, onClick = { onSetTheme(ThemeSource.CUSTOM, seed) }, enabled = valid) { Text("应用主色") }
+                OutlinedTextField(value = seed, onValueChange = { seed = it.take(7) }, label = { Text("主颜色 #RRGGBB") }, isError = !valid,
+                    supportingText = { Text(if (valid) "自动生成深浅配色；考勤状态颜色独立保留。" else "请输入六位十六进制颜色，例如 #5559C9") },
+                    singleLine = true, shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth())
+                Button(shape = MaterialTheme.shapes.small, onClick = { onSetTheme(ThemeSource.CUSTOM, seed) }, enabled = valid && !seed.equals(settings.themeSeed, true)) { Text("应用主色") }
             }
         }
     }

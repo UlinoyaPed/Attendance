@@ -12,6 +12,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -39,26 +40,25 @@ internal fun customColorScheme(seed: Int, dark: Boolean): ColorScheme {
 
 /** Accent roles may be generated; neutral layers and error roles belong to Attendance. */
 internal fun attendanceSurfaces(accent: ColorScheme, dark: Boolean, soft: Boolean = false): ColorScheme {
-    val background = if (dark) Color(0xFF11161B) else Color(0xFFF7F9FB)
-    val surface = if (dark) Color(0xFF151B21) else Color(0xFFFCFDFE)
+    val background = if (dark) Color(0xFF12121C) else Color(0xFFF4F3FB)
+    val surface = if (dark) Color(0xFF1B1B27) else Color.White
+    fun layer(amount: Float) = accent.primary.copy(alpha = amount).compositeOver(surface)
     return accent.copy(
-        background = if (soft && !dark) Color(0xFFFAF8F5) else background,
-        onBackground = if (soft) { if (dark) Color(0xFFD6DDE3) else Color(0xFF343B40) }
-            else if (dark) Color(0xFFE2E8ED) else Color(0xFF1C2730),
+        background = if (soft && !dark) Color(0xFFFAF6F3) else background,
+        onBackground = if (dark) Color(0xFFE9E6F2) else Color(0xFF252339),
         surface = if (soft && !dark) Color(0xFFFFFDFA) else surface,
-        onSurface = if (soft) { if (dark) Color(0xFFD6DDE3) else Color(0xFF343B40) }
-            else if (dark) Color(0xFFE2E8ED) else Color(0xFF1C2730),
-        onSurfaceVariant = if (dark) Color(0xFFB5C0CA) else Color(0xFF56636F),
-        surfaceDim = if (dark) background else Color(0xFFE4E9ED),
-        surfaceBright = if (dark) Color(0xFF303840) else surface,
+        onSurface = if (dark) Color(0xFFE9E6F2) else Color(0xFF252339),
+        onSurfaceVariant = if (dark) Color(0xFFC0BDCF) else Color(0xFF5D5A70),
+        surfaceDim = if (dark) background else layer(0.10f),
+        surfaceBright = if (dark) layer(0.12f) else surface,
         surfaceContainerLowest = background,
-        surfaceContainerLow = if (dark) Color(0xFF1A2128) else Color(0xFFF2F5F7),
-        surfaceContainer = if (dark) Color(0xFF1E262E) else Color(0xFFEDF1F4),
-        surfaceContainerHigh = if (dark) Color(0xFF242D35) else Color(0xFFE8EDF1),
-        surfaceContainerHighest = if (dark) Color(0xFF2A343D) else Color(0xFFE2E8ED),
-        surfaceVariant = if (dark) Color(0xFF242D35) else Color(0xFFEDF1F4),
-        outline = if (dark) Color(0xFF8996A2) else Color(0xFF75838E),
-        outlineVariant = if (dark) Color(0xFF36424D) else Color(0xFFD7DFE6),
+        surfaceContainerLow = layer(if (soft) 0.035f else 0.05f),
+        surfaceContainer = layer(0.07f),
+        surfaceContainerHigh = layer(0.09f),
+        surfaceContainerHighest = layer(0.11f),
+        surfaceVariant = layer(0.09f),
+        outline = if (dark) Color(0xFF9994B0) else Color(0xFF827B9A),
+        outlineVariant = if (dark) Color(0xFF464255) else Color(0xFFE0DBED),
         inverseSurface = if (dark) Color(0xFFE2E8ED) else Color(0xFF29343D),
         inverseOnSurface = if (dark) Color(0xFF29343D) else Color(0xFFF2F5F7),
         error = if (dark) Color(0xFFFFB4AB) else Color(0xFFBA1A1A),
@@ -70,21 +70,21 @@ internal fun attendanceSurfaces(accent: ColorScheme, dark: Boolean, soft: Boolea
 
 internal fun defaultColorScheme(dark: Boolean): ColorScheme = attendanceSurfaces(
     if (dark) darkColorScheme(
-        primary = Color(0xFFA8CDDF), onPrimary = Color(0xFF103344),
-        primaryContainer = Color(0xFF264B60), onPrimaryContainer = Color(0xFFD1E9F5),
-        secondary = Color(0xFFBCCBD4), onSecondary = Color(0xFF25343E),
-        secondaryContainer = Color(0xFF3A4A55), onSecondaryContainer = Color(0xFFD8E5EE),
-        tertiary = Color(0xFFBBCABD), onTertiary = Color(0xFF28362B),
-        tertiaryContainer = Color(0xFF3E4D40), onTertiaryContainer = Color(0xFFD7E6D8),
-        inversePrimary = Color(0xFF315A74), surfaceTint = Color(0xFFA8CDDF),
+        primary = Color(0xFFC4C1FF), onPrimary = Color(0xFF272466),
+        primaryContainer = Color(0xFF393586), onPrimaryContainer = Color(0xFFE8E2FF),
+        secondary = Color(0xFFBCC8EA), onSecondary = Color(0xFF283650),
+        secondaryContainer = Color(0xFF3D4B68), onSecondaryContainer = Color(0xFFDFE7FF),
+        tertiary = Color(0xFF8CD3D6), onTertiary = Color(0xFF00373B),
+        tertiaryContainer = Color(0xFF005054), onTertiaryContainer = Color(0xFFB8F0F0),
+        inversePrimary = Color(0xFF5559C9), surfaceTint = Color(0xFFC4C1FF),
     ) else lightColorScheme(
-        primary = Color(0xFF315A74), onPrimary = Color.White,
-        primaryContainer = Color(0xFFDCEBF3), onPrimaryContainer = Color(0xFF193B51),
-        secondary = Color(0xFF536875), onSecondary = Color.White,
-        secondaryContainer = Color(0xFFE0E9EE), onSecondaryContainer = Color(0xFF304550),
-        tertiary = Color(0xFF596D5C), onTertiary = Color.White,
-        tertiaryContainer = Color(0xFFE2EAE1), onTertiaryContainer = Color(0xFF334936),
-        inversePrimary = Color(0xFFA8CDDF), surfaceTint = Color(0xFF315A74),
+        primary = Color(0xFF5559C9), onPrimary = Color.White,
+        primaryContainer = Color(0xFFE8E5FF), onPrimaryContainer = Color(0xFF302C70),
+        secondary = Color(0xFF52617F), onSecondary = Color.White,
+        secondaryContainer = Color(0xFFE3EAFF), onSecondaryContainer = Color(0xFF2C3A55),
+        tertiary = Color(0xFF006B70), onTertiary = Color.White,
+        tertiaryContainer = Color(0xFFD6F3F2), onTertiaryContainer = Color(0xFF00474B),
+        inversePrimary = Color(0xFFC4C1FF), surfaceTint = Color(0xFF5559C9),
     ), dark,
 )
 

@@ -1,6 +1,7 @@
 package com.ulinoyaped.attendance
 
 import android.os.Build
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -22,7 +23,7 @@ private val previewStudents = listOf(
 )
 
 @Composable
-private fun PreviewTheme(source: ThemeSource = ThemeSource.ATTENDANCE, seed: String = "#315A74", content: @Composable () -> Unit) {
+private fun PreviewTheme(source: ThemeSource = ThemeSource.ATTENDANCE, seed: String = "#5559C9", content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
     val soft = source == ThemeSource.SOFT
     val context = LocalContext.current
@@ -77,6 +78,7 @@ private fun MaterialsPreview() = PreviewTheme {
 
 @Preview(name = "主页 · 浅色", widthDp = 360, heightDp = 640)
 @Preview(name = "主页 · 深色", widthDp = 360, heightDp = 640, uiMode = 0x20)
+@Preview(name = "主页 · 窄屏大字体", widthDp = 320, heightDp = 780, fontScale = 1.5f)
 @Composable
 private fun HomePreview() = PreviewTheme {
     ClassActionScreen(ClassGroup("preview", "2026 秋 · 一班", previewStudents), ProfileIconOption.PERSON, AppSettings(), {}, {}, { _, _ -> }, {}, {})
@@ -153,4 +155,27 @@ private fun SameMarkersPreview() = PreviewTheme(ThemeSource.CUSTOM, "#FF0000") {
             }
         }
     }
+}
+
+@Preview(name = "设置分组 · 浅色", widthDp = 360, heightDp = 780)
+@Preview(name = "设置分组 · 深色大字体", widthDp = 320, heightDp = 780, fontScale = 1.5f, uiMode = 0x20)
+@Composable
+private fun SettingsGroupsPreview() = PreviewTheme {
+    LazyColumn(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item { FeatureHeader("点名操作", "点按默认状态、长按与左右滑动", androidx.compose.material.icons.Icons.Default.Palette) }
+        item { SettingsGroup("点名手势") {
+            SettingRow("点按默认选择", "到场", {})
+            SettingRow("默认未到原因", "比赛外出，预计本周五下午返校", {})
+        } }
+        item { CompositionLocalProvider(LocalClassSettingsScope provides ClassSettingsScope("一班", setOf("confirmIncompleteAttendance"), {}, {}, {})) {
+            SettingsGroup("结束点名") { SwitchSettingRow("未点完时二次确认", true, {}) }
+        } }
+        item { ThemeSettingsCard(AppSettings(), { _, _ -> }) }
+    }
+}
+
+@Preview(name = "长原因选择 · 窄屏大字体", widthDp = 320, heightDp = 780, fontScale = 1.5f)
+@Composable
+private fun LongReasonSheetPreview() = PreviewTheme {
+    PreferenceChoiceSheet("默认未到原因", (1..100).map { "原因$it" }, "原因95", { it }, {}, {})
 }

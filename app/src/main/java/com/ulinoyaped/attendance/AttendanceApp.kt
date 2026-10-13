@@ -35,6 +35,7 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -42,6 +43,8 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -78,6 +81,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
@@ -106,12 +110,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -947,7 +953,7 @@ private fun ClassDetailScreen(
                 Button(shape = MaterialTheme.shapes.small,
                     onClick = onStart,
                     enabled = group.students.isNotEmpty(),
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
                 ) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(6.dp))
@@ -1374,7 +1380,7 @@ private fun RollCallScreen(
                             finish()
                         }
                     },
-                    modifier = Modifier.fillMaxWidth().padding(16.dp).height(50.dp),
+                    modifier = Modifier.fillMaxWidth().padding(16.dp).heightIn(min = 50.dp),
                     enabled = !finishing,
                 ) { Text(if (finishing) "正在保存…" else "结束并查看结果") }
             }
@@ -1906,7 +1912,7 @@ internal fun MaterialHistoryItem(className: String, task: MaterialTask, settings
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         accent = task.completedAt == null,
     ) { Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Default.Inventory2, null, tint = if (task.completedAt == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        Icon(Icons.Default.Inventory2, null, tint = MaterialTheme.colorScheme.tertiary)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(task.title, style = MaterialTheme.typography.titleMedium)
@@ -1983,8 +1989,13 @@ private fun SettingsScreen(
     bottomBar: @Composable () -> Unit,
 ) {
     val classScope = LocalClassSettingsScope.current
-    val destinations = if (classScope == null) settingsDestinations else settingsDestinations.map { group -> group.filter { it.key != "备份" } }.filter { it.isNotEmpty() }
+    val settingsFocus = androidx.compose.ui.platform.LocalFocusManager.current
+    val settingsKeyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val destinations = if (classScope == null) settingsDestinations else settingsDestinations.map { group ->
+        group.filter { it.key != "备份" }.map { if (it.key == "外观") it.copy(title = "状态外观", subtitle = "本班的点名状态图标与颜色") else it }
+    }.filter { it.isNotEmpty() }
     var page by rememberSaveable { mutableStateOf<String?>(null) }
+    var settingsQuery by rememberSaveable { mutableStateOf("") }
     val pageStateHolder = rememberSaveableStateHolder()
     BackHandler(enabled = page != null) { page = null }
     var showAddReason by remember { mutableStateOf(false) }
@@ -2061,9 +2072,23 @@ private fun SettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         if (displayedPage == null) {
+                            item {
+                                OutlinedTextField(value = settingsQuery, onValueChange = { settingsQuery = it.take(80) },
+                                    placeholder = { Text("搜索设置，例如：滑动、学号") }, singleLine = true,
+                                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                                    trailingIcon = { if (settingsQuery.isNotEmpty()) IconButton(onClick = { settingsQuery = "" }) { Icon(Icons.Default.Close, "清除设置搜索") } },
+                                    shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth(),
+                                    colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                                        focusedContainerColor = MaterialTheme.colorScheme.surface, unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant))
+                            }
                             if (classScope != null) item { ClassSettingsSummary(classScope) }
-                            items(destinations) { destinations ->
-                                SettingsDestinationGroup(destinations) { page = it }
+                            else item { FeatureHeader("全局偏好", "默认用于所有班级；每个班级也可以逐项调整。", Icons.Default.Settings) }
+                            val filteredGroups = destinations.map { group -> group.filter { destination ->
+                                destination.matches(settingsQuery) || (destination.key == "原因" && settingsQuery.isNotBlank() && settings.absenceReasons.any { it.contains(settingsQuery.trim(), true) })
+                            } }.filter { it.isNotEmpty() }
+                            if (filteredGroups.isEmpty()) item { HintCard("没有匹配的设置，请换个关键词。") }
+                            items(filteredGroups) { group ->
+                                SettingsDestinationGroup(group) { settingsFocus.clearFocus(); settingsKeyboard?.hide(); page = it }
                                 Spacer(Modifier.height(8.dp))
                             }
                         }
@@ -2075,7 +2100,7 @@ private fun SettingsScreen(
                         }
                         if (displayedPage == "操作") {
                             item {
-                                SettingsGroup {
+                                SettingsGroup(title = "点名手势", subtitle = "点按、长按和左右滑动的快捷动作") {
                                     SettingRow(
                                         title = "点按默认选择",
                                         value = settings.defaultStatus.label,
@@ -2101,6 +2126,9 @@ private fun SettingsScreen(
                                     )
                                 }
                             }
+                            item { SettingsGroup(title = "结束点名") {
+                                SwitchSettingRow("未点完时二次确认", settings.confirmIncompleteAttendance) { onSetDisplayOption(DisplayOption.CONFIRM_INCOMPLETE, it) }
+                            } }
                             item {
                                 Text(
                                     "再次点按相同状态会清除标记。左右滑动需要明确的横向手势。",
@@ -2168,39 +2196,6 @@ private fun SettingsScreen(
                                         settings.compactRollCallRows,
                                     ) { onSetDisplayOption(DisplayOption.COMPACT_ROLL_CALL, it) }
 
-                                    SwitchSettingRow(
-                                        "未点完时二次确认",
-                                        settings.confirmIncompleteAttendance,
-                                    ) { onSetDisplayOption(DisplayOption.CONFIRM_INCOMPLETE, it) }
-
-                                }
-                            }
-                            item {
-                                SettingsGroup(title = "结果与历史", subtitle = "统计信息与空分类显示") {
-                                    SwitchSettingRow(
-                                        "显示结果统计卡",
-                                        settings.showResultSummary,
-                                    ) { onSetDisplayOption(DisplayOption.RESULT_SUMMARY, it) }
-
-                                    SwitchSettingRow(
-                                        "显示空结果分类",
-                                        settings.showEmptyResultGroups,
-                                    ) { onSetDisplayOption(DisplayOption.EMPTY_RESULT_GROUPS, it) }
-                                    SwitchSettingRow(
-                                        "显示历史统计",
-                                        settings.showHistoryStatistics,
-                                    ) { onSetDisplayOption(DisplayOption.HISTORY_STATISTICS, it) }
-                                }
-                            }
-                            item {
-                                SettingsGroup(title = "分类折叠", subtitle = "进入结果页时默认收起指定分类，可手动展开") {
-                                    resultCollapseOptions.forEach { (option, status) ->
-
-                                        SwitchSettingRow(
-                                            "默认折叠${status.label}列表",
-                                            status in settings.collapsedResultStatuses,
-                                        ) { onSetDisplayOption(option, it) }
-                                    }
 
                                 }
                             }
@@ -2279,15 +2274,20 @@ private fun SettingsScreen(
                             }
                         }
                         if (displayedPage == "结果") {
-                            item {
-                                SettingsGroup {
-                                    SwitchSettingRow(
-                                        "按状态分类排列",
-                                        settings.groupResultsByStatus,
-                                        onSetGroupResultsByStatus,
-                                    )
-                                }
-                            }
+                            item { SettingsGroup(title = "排列与统计") {
+                                SwitchSettingRow("按状态分类排列", settings.groupResultsByStatus, onSetGroupResultsByStatus)
+                                SwitchSettingRow("显示结果统计卡", settings.showResultSummary) { onSetDisplayOption(DisplayOption.RESULT_SUMMARY, it) }
+                            } }
+                            if (settings.groupResultsByStatus) {
+                                item { SettingsGroup(title = "分类显示") {
+                                    SwitchSettingRow("显示空结果分类", settings.showEmptyResultGroups) { onSetDisplayOption(DisplayOption.EMPTY_RESULT_GROUPS, it) }
+                                } }
+                                item { SettingsGroup(title = "默认折叠", subtitle = "进入结果时收起分类；点击标题仍可展开") {
+                                    resultCollapseOptions.forEach { (option, status) ->
+                                        SwitchSettingRow("默认折叠${status.label}列表", status in settings.collapsedResultStatuses) { onSetDisplayOption(option, it) }
+                                    }
+                                } }
+                            } else item { HintCard("切换为分类排列后，可设置空分类与默认折叠。") }
                         }
                         if (displayedPage == "导出") {
                             item {
@@ -2321,6 +2321,9 @@ private fun SettingsScreen(
                             }
                         }
                         if (displayedPage == "历史") {
+                            item { SettingsGroup(title = "记录信息") {
+                                SwitchSettingRow("显示历史统计", settings.showHistoryStatistics) { onSetDisplayOption(DisplayOption.HISTORY_STATISTICS, it) }
+                            } }
                             item {
                                 SettingsGroup {
                                     SettingRow(
@@ -2554,7 +2557,7 @@ private fun ClassSettingsScreen(
     }
 }
 
-private data class SettingsDestination(
+internal data class SettingsDestination(
     val key: String,
     val title: String,
     val subtitle: String,
@@ -2569,75 +2572,73 @@ private val settingsDestinations = listOf(
     ),
     listOf(
         SettingsDestination("外观", "外观与头像", "主题风格、头像与点名状态外观", Icons.Default.Palette),
-        SettingsDestination("显示", "界面显示", "控件、文字、紧凑布局与默认折叠", Icons.Default.Person),
-        SettingsDestination("结果", "结果排列", "按状态分类或显示完整人员列表", Icons.Default.Groups),
+        SettingsDestination("显示", "界面显示", "学号、进度、提示与列表密度", Icons.Default.Person),
+        SettingsDestination("结果", "结果排列", "排列方式、结果统计与分类折叠", Icons.Default.Groups),
     ),
     listOf(
         SettingsDestination("导出", "文本导出", "分类明细、统计、学号与原因", Icons.Default.Save),
-        SettingsDestination("历史", "历史记录", "班级名称与点名时间标题", Icons.Default.History),
+        SettingsDestination("历史", "历史记录", "记录标题、时间与历史统计", Icons.Default.History),
         SettingsDestination("备份", "数据备份", "完整备份与恢复班级、历史和草稿", Icons.Default.FileUpload),
     ),
 )
 
+
+private val settingsSearchTerms = mapOf(
+    "操作" to "点按默认选择 长按姓名 向左滑动 向右滑动 未点完时二次确认 到场 迟到 请假 缺勤 不参与 默认状态 手势 点按 长按 左滑 右滑 确认 结束 未点完",
+    "材料" to "头像快捷确认材料 显示材料统计 显示材料操作提示 紧凑材料列表 显示材料状态按钮 头像 确认 统计 进度 提示 紧凑 密度 状态按钮",
+    "原因" to "常用原因 默认未到原因 常用 默认 原因 排序 拖动 请假 备注",
+    "外观" to "Attendance 柔和 系统 动态 自定义 主题 配色 颜色 图标 头像 到场 迟到 请假 缺勤 不参与",
+    "显示" to "显示班级人数 显示班级页操作提示 显示学生学号 显示已处理进度 显示点名操作提示 显示状态按钮 名单中显示原因 紧凑点名列表 人数 学号 进度 提示 状态按钮 原因 紧凑 密度",
+    "结果" to "按状态分类排列 显示结果统计卡 显示空结果分类 默认折叠到列表 默认折叠迟到列表 默认折叠请假列表 默认折叠缺勤列表 默认折叠不参与列表 统计 空分类 分类 完整名单 折叠 到场 迟到 请假 缺勤 不参与",
+    "历史" to "显示历史统计 记录标题 统计 标题 班级 时间 日期 记录",
+    "导出" to "班级与点名时间 到勤统计 到场学生明细 迟到学生明细 请假学生明细 缺勤学生明细 不参与学生明细 学生学号 原因或备注 文本 抬头 统计 学号 备注 到场 迟到 请假 缺勤 不参与 明细",
+    "备份" to "JSON 备份 恢复 本地 数据",
+)
+internal fun SettingsDestination.matches(query: String): Boolean = query.isBlank() ||
+    "$title $subtitle ${if (key == "外观" && title == "状态外观") "状态 图标 颜色 到场 迟到 请假 缺勤 不参与" else settingsSearchTerms[key].orEmpty()}".contains(query.trim(), ignoreCase = true)
+
 @Composable
-private fun SettingsDestinationGroup(destinations: List<SettingsDestination>, onOpen: (String) -> Unit) {
-    Column(Modifier.fillMaxWidth()) {
-        destinations.forEachIndexed { index, destination ->
-            if (index > 0) HorizontalDivider(Modifier.padding(start = 52.dp), color = MaterialTheme.colorScheme.outlineVariant)
-            Row(
-                Modifier.fillMaxWidth().clickable { onOpen(destination.key) }.padding(horizontal = 12.dp, vertical = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(destination.icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
-                Spacer(Modifier.width(18.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(destination.title, style = MaterialTheme.typography.titleMedium)
-                    Text(destination.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+internal fun SettingsDestinationGroup(destinations: List<SettingsDestination>, onOpen: (String) -> Unit) {
+    val groupTitle = when (destinations.firstOrNull()?.key) { "操作", "材料", "原因" -> "日常使用"; "外观", "显示", "结果" -> "界面与结果"; else -> "数据与备份" }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(groupTitle, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp))
+        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface) {
+            Column {
+                destinations.forEachIndexed { index, destination ->
+                    if (index > 0) HorizontalDivider(Modifier.padding(start = 70.dp, end = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+                    Row(Modifier.fillMaxWidth().clickable { onOpen(destination.key) }.heightIn(min = 76.dp).padding(horizontal = 14.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        AccentIcon(destination.icon)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(destination.title, style = MaterialTheme.typography.titleMedium)
+                            Text(destination.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                    }
                 }
-                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
             }
         }
     }
 }
 
 @Composable
-private fun SettingsGroup(title: String? = null, subtitle: String? = null, content: @Composable () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        if (title != null) Text(title, style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp))
-        if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 8.dp))
-        content()
+internal fun SettingsGroup(title: String? = null, subtitle: String? = null, content: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (title != null) Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+            if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 3.dp))
+        }
+        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface) {
+            Column(Modifier.padding(vertical = 4.dp)) { content() }
+        }
     }
 }
 
 @Composable
 private fun SettingsPageIntro(destination: SettingsDestination) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-        Text(destination.title, style = MaterialTheme.typography.headlineMedium)
-        Text(destination.subtitle, style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-    }
-}
-
-@Composable
-private fun SettingsRowIcon(title: String) {
-    val icon = when {
-        title.contains("折叠") -> Icons.Default.ExpandMore
-        title.contains("历史") || title.contains("时间") || title.contains("记录") -> Icons.Default.History
-        title.contains("原因") || title.contains("请假") -> Icons.Default.EventBusy
-        title.contains("迟到") -> Icons.Default.Schedule
-        title.contains("缺勤") -> Icons.Default.Close
-        title.contains("不参与") -> Icons.Default.RemoveCircle
-        title.contains("统计") || title.contains("进度") || title.contains("到场") -> Icons.Default.CheckCircle
-        title.contains("学号") || title.contains("名单") || title.contains("学生") -> Icons.Default.Person
-        title.contains("班级") -> Icons.Default.Groups
-        title.contains("提示") || title.contains("确认") -> Icons.Default.Help
-        else -> Icons.Default.Settings
-    }
-    Icon(icon, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
-    Spacer(Modifier.width(18.dp))
+    FeatureHeader(destination.title, destination.subtitle, destination.icon)
 }
 
 private fun settingDescription(title: String): String? = when (title) {
@@ -2671,19 +2672,27 @@ private fun settingDescription(title: String): String? = when (title) {
 }
 
 @Composable
-private fun SettingRow(title: String, value: String, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(16.dp, 13.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        SettingsRowIcon(title)
-        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text("当前：$value", style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-            SettingInheritance(title)
+internal fun SettingRow(title: String, value: String, onClick: () -> Unit) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val stacked = value.length > 10 || (maxWidth < 360.dp && androidx.compose.ui.platform.LocalDensity.current.fontScale > 1.2f)
+        Row(Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, style = MaterialTheme.typography.bodyLarge)
+                if (stacked) SettingValue(value)
+                SettingInheritance(title)
+            }
+            if (!stacked) SettingValue(value, Modifier.widthIn(max = 160.dp))
+            Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
         }
-        Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun SettingValue(value: String, modifier: Modifier = Modifier) {
+    Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceContainerLow, modifier = modifier) {
+        Text(if (value == "到") "到场" else value, style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
     }
 }
 
@@ -2749,205 +2758,56 @@ internal fun StatusAppearanceRow(
 }
 
 @Composable
-private fun SwitchSettingRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange).padding(20.dp, 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        SettingsRowIcon(title)
-        Column(modifier = Modifier.weight(1f).padding(end = 16.dp)) {
+internal fun SwitchSettingRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
+        .heightIn(min = 64.dp).padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
-            settingDescription(title)?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-            }
+            settingDescription(title)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             SettingInheritance(title)
         }
-        Switch(checked = checked, onCheckedChange = null)
+        Switch(checked = checked, onCheckedChange = null, colors = SwitchDefaults.colors(
+            checkedTrackColor = MaterialTheme.colorScheme.primary, checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+            uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHigh, uncheckedBorderColor = MaterialTheme.colorScheme.outlineVariant))
     }
 }
 
 @Composable
-private fun StatusChoiceDialog(
-    title: String,
-    selected: AttendanceStatus,
-    onDismiss: () -> Unit,
-    onSelect: (AttendanceStatus) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column {
-                AttendanceStatus.entries.filterNot { it == AttendanceStatus.UNMARKED }.forEach { status ->
-                    ChoiceRow(status.label, status == selected) { onSelect(status) }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
+private fun StatusChoiceDialog(title: String, selected: AttendanceStatus, onDismiss: () -> Unit, onSelect: (AttendanceStatus) -> Unit) {
+    PreferenceChoiceSheet(title, AttendanceStatus.entries.filter { it != AttendanceStatus.UNMARKED }, selected,
+        { if (it == AttendanceStatus.PRESENT) "到场" else it.label }, onDismiss, onSelect)
 }
 
 @Composable
-private fun ReasonChoiceDialog(
-    reasons: List<String>,
-    selected: String,
-    onDismiss: () -> Unit,
-    onSelect: (String) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("默认未到原因") },
-        text = {
-            Column {
-                ChoiceRow("不预填", selected.isEmpty()) { onSelect("") }
-                reasons.forEach { reason ->
-                    ChoiceRow(reason, reason == selected) { onSelect(reason) }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
+private fun ReasonChoiceDialog(reasons: List<String>, selected: String, onDismiss: () -> Unit, onSelect: (String) -> Unit) {
+    PreferenceChoiceSheet("默认未到原因", listOf("") + reasons, selected, { it.ifEmpty { "不预填" } }, onDismiss, onSelect)
 }
 
 @Composable
-private fun IconChoiceDialog(
-    title: String,
-    selected: StatusIconOption,
-    onDismiss: () -> Unit,
-    onSelect: (StatusIconOption) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column {
-                StatusIconOption.entries.forEach { option ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clickable { onSelect(option) }.padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(selected = option == selected, onClick = { onSelect(option) })
-                        Icon(statusImageVector(option), contentDescription = null, modifier = Modifier.size(21.dp))
-                        Text(option.label, modifier = Modifier.padding(start = 10.dp))
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
+private fun IconChoiceDialog(title: String, selected: StatusIconOption, onDismiss: () -> Unit, onSelect: (StatusIconOption) -> Unit) {
+    PreferenceChoiceSheet(title, StatusIconOption.entries, selected, { it.label }, onDismiss, onSelect, icon = ::statusImageVector)
 }
 
 @Composable
-private fun ProfileIconChoiceDialog(
-    selected: ProfileIconOption,
-    onDismiss: () -> Unit,
-    onSelect: (ProfileIconOption) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("头像图标") },
-        text = {
-            Column {
-                ProfileIconOption.entries.forEach { option ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clickable { onSelect(option) }.padding(vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(selected = option == selected, onClick = { onSelect(option) })
-                        Icon(profileImageVector(option), contentDescription = null, modifier = Modifier.size(21.dp))
-                        Text(option.label, modifier = Modifier.padding(start = 10.dp))
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
+private fun ProfileIconChoiceDialog(selected: ProfileIconOption, onDismiss: () -> Unit, onSelect: (ProfileIconOption) -> Unit) {
+    PreferenceChoiceSheet("头像图标", ProfileIconOption.entries, selected, { it.label }, onDismiss, onSelect, icon = ::profileImageVector)
 }
 
 @Composable
-private fun ColorChoiceDialog(
-    title: String,
-    selected: StatusColorOption,
-    onDismiss: () -> Unit,
-    onSelect: (StatusColorOption) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column {
-                StatusColorOption.entries.forEach { option ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clickable { onSelect(option) }.padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(selected = option == selected, onClick = { onSelect(option) })
-                        Box(
-                            modifier = Modifier
-                                .size(22.dp)
-                                .clip(CircleShape)
-                                .background(statusColor(option)),
-                        )
-                        Text(option.label, modifier = Modifier.padding(start = 10.dp))
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
+private fun ColorChoiceDialog(title: String, selected: StatusColorOption, onDismiss: () -> Unit, onSelect: (StatusColorOption) -> Unit) {
+    PreferenceChoiceSheet(title, StatusColorOption.entries, selected, { it.label }, onDismiss, onSelect,
+        icon = { Icons.Default.Palette }, tint = { statusColor(it) })
 }
 
 @Composable
-private fun HistoryTitleChoiceDialog(
-    selected: HistoryTitleMode,
-    onDismiss: () -> Unit,
-    onSelect: (HistoryTitleMode) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("历史记录标题") },
-        text = {
-            Column {
-                HistoryTitleMode.entries.forEach { option ->
-                    ChoiceRow(option.label, option == selected) { onSelect(option) }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
+private fun HistoryTitleChoiceDialog(selected: HistoryTitleMode, onDismiss: () -> Unit, onSelect: (HistoryTitleMode) -> Unit) {
+    PreferenceChoiceSheet("历史记录标题", HistoryTitleMode.entries, selected, { it.label }, onDismiss, onSelect)
 }
 
 @Composable
-private fun GestureChoiceDialog(
-    title: String,
-    selected: GestureAction,
-    onDismiss: () -> Unit,
-    onSelect: (GestureAction) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column {
-                GestureAction.entries.forEach { action ->
-                    ChoiceRow(action.label, action == selected) { onSelect(action) }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
-}
-
-@Composable
-private fun ChoiceRow(label: String, selected: Boolean, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 3.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        RadioButton(selected = selected, onClick = onClick)
-        Text(label)
-    }
+private fun GestureChoiceDialog(title: String, selected: GestureAction, onDismiss: () -> Unit, onSelect: (GestureAction) -> Unit) {
+    PreferenceChoiceSheet(title, GestureAction.entries, selected, { it.label }, onDismiss, onSelect)
 }
 
 @Composable
@@ -3097,7 +2957,7 @@ internal fun GlobalHistoryItem(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(headline, style = MaterialTheme.typography.titleMedium)

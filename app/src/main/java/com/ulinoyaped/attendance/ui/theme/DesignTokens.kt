@@ -17,11 +17,11 @@ import com.ulinoyaped.attendance.data.StatusColorOption
 
 // Small controls / inputs / list groups / feature panels / dialogs and sheets.
 internal fun attendanceShapes(soft: Boolean) = if (soft) Shapes(
-    RoundedCornerShape(8.dp), RoundedCornerShape(12.dp), RoundedCornerShape(16.dp),
-    RoundedCornerShape(22.dp), RoundedCornerShape(28.dp),
+    RoundedCornerShape(8.dp), RoundedCornerShape(14.dp), RoundedCornerShape(18.dp),
+    RoundedCornerShape(24.dp), RoundedCornerShape(30.dp),
 ) else Shapes(
-    RoundedCornerShape(4.dp), RoundedCornerShape(8.dp), RoundedCornerShape(12.dp),
-    RoundedCornerShape(16.dp), RoundedCornerShape(24.dp),
+    RoundedCornerShape(6.dp), RoundedCornerShape(12.dp), RoundedCornerShape(16.dp),
+    RoundedCornerShape(20.dp), RoundedCornerShape(28.dp),
 )
 
 private fun text(size: Int, height: Int, weight: FontWeight = FontWeight.Normal) = TextStyle(
@@ -43,7 +43,7 @@ internal val AttendanceTypography = Typography(
 internal data class AttendanceLayout(val dark: Boolean = false, val soft: Boolean = false) {
     val pageInset = 16.dp
     val rowInset = 12.dp
-    val rowGap = if (soft) 6.dp else 2.dp
+    val rowGap = if (soft) 8.dp else 4.dp
     val rowPadding = if (soft) 12.dp else 8.dp
     val groupGap = if (soft) 16.dp else 12.dp
 }

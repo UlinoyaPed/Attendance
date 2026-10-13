@@ -3,6 +3,11 @@ package com.ulinoyaped.attendance
 import com.ulinoyaped.attendance.data.AttendanceStatus
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.ui.Alignment
+import androidx.compose.runtime.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -49,22 +54,29 @@ internal fun SettingInheritance(title: String, field: String? = null) {
         "collapse.${status.name}"
     } else return
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        val prefix = if (field != null) "$title · " else ""
-        Text(prefix + if (key in scope.fields) "本班覆写" else "跟随全局",
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.align(androidx.compose.ui.Alignment.CenterVertically),
-            color = if (key in scope.fields) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-        if (key in scope.fields) Text("恢复全局", style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.align(androidx.compose.ui.Alignment.CenterVertically).clickable(onClickLabel = "恢复$title 为全局设置", role = androidx.compose.ui.semantics.Role.Button) { scope.onReset(key) }.padding(vertical = 6.dp, horizontal = 4.dp))
+        val overridden = key in scope.fields
+        Surface(shape = MaterialTheme.shapes.extraSmall, modifier = Modifier.align(Alignment.CenterVertically),
+            color = if (overridden) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow) {
+            Text((if (field != null) "$title · " else "") + if (overridden) "本班设置" else "跟随全局",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (overridden) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp))
+        }
+        if (overridden) IconButton(onClick = { scope.onReset(key) }) {
+            Icon(Icons.AutoMirrored.Filled.Undo, "恢复$title 为全局设置", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+        }
     }
 }
 
 @Composable
 internal fun ClassSettingsSummary(scope: ClassSettingsScope) {
-    Column(Modifier.fillMaxWidth().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("${scope.name} · ${scope.fields.size} 项覆写", style = MaterialTheme.typography.titleMedium)
-        Text("改动自动保存，仅影响本班。未覆写项随全局设置更新。", style = MaterialTheme.typography.bodySmall)
-        if (scope.fields.isNotEmpty()) TextButton(onClick = scope.onResetAll) { Text("全部恢复为全局设置") }
+    var confirmReset by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FeatureHeader("${scope.name} · 本班设置", "${scope.fields.size} 项单独设置，其余跟随全局。", Icons.AutoMirrored.Filled.Undo)
+        if (scope.fields.isNotEmpty()) TextButton(onClick = { confirmReset = true }) { Text("全部恢复为全局设置") }
     }
+    if (confirmReset) AlertDialog(onDismissRequest = { confirmReset = false }, title = { Text("恢复全局设置？") },
+        text = { Text("将清除本班的 ${scope.fields.size} 项设置覆写，重新跟随全局设置。") },
+        confirmButton = { TextButton(onClick = { scope.onResetAll(); confirmReset = false }) { Text("恢复全局") } },
+        dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("取消") } })
 }
