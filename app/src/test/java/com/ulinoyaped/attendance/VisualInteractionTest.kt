@@ -147,6 +147,7 @@ class VisualInteractionTest {
             }
         } }
         ui.onNodeWithText("缺勤").assertIsDisplayed()
+        ui.onNodeWithText("异常").assertIsDisplayed().assertIsSelected()
         capture("roll-call-light-320-large")
         ui.onNodeWithText("阿依古丽·买买提").performClick()
         ui.onNodeWithText("到").assertIsDisplayed()

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
@@ -28,6 +29,8 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,6 +46,9 @@ import com.ulinoyaped.attendance.data.AttendanceMark
 import com.ulinoyaped.attendance.data.AttendanceStatus
 import com.ulinoyaped.attendance.data.RollCallFilter
 import com.ulinoyaped.attendance.data.isException
+import kotlinx.coroutines.flow.first
+
+private val overviewFilters = listOf(RollCallFilter.ALL, RollCallFilter.UNMARKED, RollCallFilter.EXCEPTIONS, RollCallFilter.MARKED)
 
 @Composable
 internal fun RollCallSearchTools(
@@ -50,6 +56,19 @@ internal fun RollCallSearchTools(
     filter: RollCallFilter, onFilterChange: (RollCallFilter) -> Unit,
 ) {
     val focus = LocalFocusManager.current
+    val chipState = rememberLazyListState()
+    val chipColors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer)
+    LaunchedEffect(filter) {
+        val index = overviewFilters.indexOf(filter)
+        if (index >= 0) {
+            val layout = snapshotFlow { chipState.layoutInfo }.first { it.totalItemsCount > 0 }
+            val item = layout.visibleItemsInfo.firstOrNull { it.index == index }
+            if (item == null || item.offset < layout.viewportStartOffset || item.offset + item.size > layout.viewportEndOffset) {
+                chipState.scrollToItem(index)
+            }
+        }
+    }
     var showStatusMenu by remember { mutableStateOf(false) }
     Column {
         OutlinedTextField(
@@ -63,13 +82,14 @@ internal fun RollCallSearchTools(
                 focusedContainerColor = MaterialTheme.colorScheme.surface, unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant),
         )
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            LazyRow(modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                items(listOf(RollCallFilter.ALL, RollCallFilter.UNMARKED, RollCallFilter.EXCEPTIONS, RollCallFilter.MARKED)) { option ->
-                    FilterChip(colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.primaryContainer, selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer), selected = filter == option, onClick = { focus.clearFocus(); onFilterChange(option) }, label = { Text(option.label) })
+            LazyRow(state = chipState, modifier = Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(overviewFilters) { option ->
+                    FilterChip(colors = chipColors, selected = filter == option, onClick = { focus.clearFocus(); onFilterChange(option) }, label = { Text(option.label) })
                 }
             }
             Box {
                 FilterChip(
+                    colors = chipColors,
                     selected = filter.status != null,
                     onClick = { focus.clearFocus(); showStatusMenu = true },
                     label = { Text(if (filter.status != null) filter.label else "状态") },
